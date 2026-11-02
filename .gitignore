@@ -1,0 +1,186 @@
+
+# ==========================================
+# AlterCharge - Monorepo .gitignore
+# Backend: Java + Spring Boot
+# Frontend: Kotlin + Android (Pleos SDK)
+# ==========================================
+
+
+# ==========================================
+# 1. Gradle
+# ==========================================
+**/.gradle/
+**/build/
+**/.kotlin/
+**/out/
+
+# Gradle cache
+.gradle-cache/
+
+
+# ==========================================
+# 2. Maven (if used)
+# ==========================================
+**/target/
+**/pom.xml.tag
+**/pom.xml.releaseBackup
+**/pom.xml.versionsBackup
+**/release.properties
+
+
+# ==========================================
+# 3. IntelliJ IDEA / Android Studio
+# ==========================================
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Kotlin / Java IDE files
+**/.classpath
+**/.project
+**/.settings/
+**/.factorypath
+
+# VS Code / Fleet
+.vscode/
+.fleet/
+
+
+# ==========================================
+# 4. Android / Pleos
+# ==========================================
+**/local.properties
+
+# Android generated files
+**/captures/
+**/.externalNativeBuild/
+**/.cxx/
+**/generated/
+
+# Android build artifacts
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Android signing keys
+*.jks
+*.keystore
+
+# Android device / emulator logs
+*.hprof
+*.trace
+
+
+# ==========================================
+# 5. Spring Boot
+# ==========================================
+# Local / secret configuration
+**/application-local.yml
+**/application-local.yaml
+**/application-local.properties
+**/application-secret.yml
+**/application-secret.yaml
+**/application-secret.properties
+
+# Runtime files
+*.pid
+*.pid.lock
+
+# Logs
+*.log
+logs/
+**/logs/
+
+
+# ==========================================
+# 6. Environment Variables / Secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Credentials and private keys
+*.pem
+*.p12
+*.pfx
+*.key
+*.asc
+credentials.json
+secrets.json
+
+
+# ==========================================
+# 7. Database / Local Data
+# ==========================================
+*.db
+*.sqlite
+*.sqlite3
+
+# H2 local database
+*.mv.db
+*.trace.db
+
+# Local PostgreSQL volumes
+postgres_data/
+pgdata/
+
+
+# ==========================================
+# 8. Docker
+# ==========================================
+# Local override and environment files
+compose.override.yaml
+compose.override.yml
+docker-compose.override.yml
+docker-compose.override.yaml
+
+
+# ==========================================
+# 9. Operating System
+# ==========================================
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+*.swp
+*.swo
+*~
+
+
+# ==========================================
+# 10. Temporary Files
+# ==========================================
+*.tmp
+*.temp
+*.bak
+*.orig
+.cache/
+tmp/
+temp/
+
+
+# ==========================================
+# 11. Test / Coverage Reports
+# ==========================================
+**/coverage/
+**/test-results/
+**/jacoco/
+
+
+# ==========================================
+# 12. Keep Project Files
+# ==========================================
+# Do NOT ignore:
+# gradlew / gradlew.bat
+# gradle/wrapper/
+# build.gradle / build.gradle.kts
+# settings.gradle / settings.gradle.kts
+# pom.xml
+# application.yml
+# AndroidManifest.xml
+# Dockerfile
+# docker-compose.yml
+# .gitkeep
