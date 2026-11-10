@@ -30,6 +30,19 @@
 
 ---
 
+
+### 데이터 타입 기준 (Kotlin)
+
+- 아래 표의 **Kotlin 타입**은 프론트 DTO 작성 시 사용할 **제안 타입**입니다. 실제 서버와의 타입 계약은 구현 전에 확정해야 합니다.
+- `String` ↔ JSON 문자열, `Int` ↔ 정수, `Double` ↔ 소수 포함 숫자, `Boolean` ↔ 참/거짓, `List<T>` ↔ JSON 배열, `?` ↔ `null` 허용을 의미합니다.
+- 날짜·시각은 JSON에서 모두 `String`으로 전달하며, `recordedAt`·`checkedAt` 같은 시각은 **ISO 8601 오프셋 포함** (`2026-11-11T01:30:00+09:00`), `from`·`to`는 `YYYY-MM-DD` 형식을 사용합니다. 필요하면 Kotlin 내부에서 `OffsetDateTime`/`LocalDate`로 파싱할 수 있습니다.
+- GET의 Query 값은 URL에서 모두 텍스트로 인코딩되지만, Retrofit `@Query` / `@Path`의 Kotlin 인수는 표에 적힌 `Double`, `Int`, `Boolean`, `String` 타입으로 선언할 수 있습니다.
+- `maxOutputKw`·`outputKw`는 출력값에 소수나 누락값이 올 수 있어 `Double?`로 표기했습니다. 기존 예시 JSON의 `100` 같은 정수 표기는 **그대로 유지**했습니다.
+- `feePerKwh` 등 데이터가 없을 수 있는 필드의 `?`는 프론트의 null 처리에 도움이 되도록 표시한 제안입니다. **일부 예외 상황의 null 응답 정책은 아직 미확정**이므로 확정 사양으로 간주하지 않습니다.
+- `StationSummaryDto`, `ChargerDto`, `RecommendedStationDto`, `VehicleSnapshotDto`는 **설명용 Kotlin 객체 클래스명**으로, 실제 코드에 존재한다고 가정하지 않습니다.
+
+---
+
 ## API 목록
 
 | 번호 | Method | Endpoint | 기능 | 구분 |
@@ -60,14 +73,14 @@
 
 ### Query 파라미터
 
-| 파라미터 | 예시 | 설명 |
-| --- | --- | --- |
-| `lat` | `37.5500` | 현재 차량 위치의 위도 |
-| `lng` | `127.1400` | 현재 차량 위치의 경도 |
-| `radiusKm` | `3` | 조회 반경(km). MVP 기준 3km |
-| `keyword` | 빈 값 (`keyword=`) | 충전소명·주소 검색어. 빈 값이면 검색어 없음 |
-| `page` | `0` | 조회 페이지 번호(예시: 0부터 시작) |
-| `size` | `20` | 한 페이지 응답 개수 |
+| 파라미터 | Kotlin 타입 | 예시 | 설명 |
+| --- | --- | --- | --- |
+| `lat` | `Double` | `37.5500` | 현재 차량 위치의 위도 |
+| `lng` | `Double` | `127.1400` | 현재 차량 위치의 경도 |
+| `radiusKm` | `Int` | `3` | 조회 반경(km). MVP 기준 3km |
+| `keyword` | `String` | 빈 값 (`keyword=`) | 충전소명·주소 검색어. 빈 값이면 검색어 없음 |
+| `page` | `Int` | `0` | 조회 페이지 번호(예시: 0부터 시작) |
+| `size` | `Int` | `20` | 한 페이지 응답 개수 |
 
 ### 요청 예시
 
@@ -106,6 +119,28 @@ GET /api/v1/stations?lat=37.5500&lng=127.1400&radiusKm=3&keyword=&page=0&size=20
 }
 ```
 
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `items` | `array<object>` | `List<StationSummaryDto>` | 충전소 목록 |
+| `items[].stationId` | `string` | `String` | 충전소 식별자 |
+| `items[].name` | `string` | `String` | 충전소명 |
+| `items[].address` | `string` | `String` | 충전소 주소 |
+| `items[].lat` | `number` | `Double` | 충전소 위도 |
+| `items[].lng` | `number` | `Double` | 충전소 경도 |
+| `items[].distanceMeters` | `integer` | `Int` | 차량 위치로부터 거리(m) |
+| `items[].availableCount` | `integer` | `Int` | 이용 가능한 충전기 수 |
+| `items[].totalValidCount` | `integer` | `Int` | 유효한 전체 충전기 수 |
+| `items[].chargerTypes` | `array<string>` | `List<String>` | 지원 커넥터 유형 목록 |
+| `items[].maxOutputKw` | `number` | `Double?` | 최대 출력(kW); 출처에 값이 없을 가능성 고려 |
+| `items[].visitCount` | `integer` | `Int` | 해당 사용자 방문 횟수 |
+| `items[].statusObservedAt` | `string (date-time)` | `String` | 상태 관측 시각, ISO 8601 |
+| `page` | `integer` | `Int` | 0부터 시작하는 페이지 |
+| `size` | `integer` | `Int` | 페이지 크기 |
+| `hasNext` | `boolean` | `Boolean` | 다음 페이지 존재 여부 |
+| `fetchedAt` | `string (date-time)` | `String` | 서버 응답 데이터 조회 시각, ISO 8601 |
+
 **주의:** 조회 반경은 요구사항대로 3km. 정렬·필터의 화면 동작은 프론트 담당이지만, 서버가 정렬·검색에 필요한 전체 필드를 제공한다. 페이지네이션을 사용한다면 전역 방문순 정렬은 서버에서 수행하거나 충분한 결과를 받아야 한다.
 
 [↑ 목차로 돌아가기](#목차)
@@ -127,9 +162,9 @@ GET /api/v1/stations?lat=37.5500&lng=127.1400&radiusKm=3&keyword=&page=0&size=20
 
 ### Path 파라미터
 
-| 파라미터 | 예시 | 설명 |
-| --- | --- | --- |
-| `stationId` | `ST-001` | 조회할 충전소 ID |
+| 파라미터 | Kotlin 타입 | 예시 | 설명 |
+| --- | --- | --- | --- |
+| `stationId` | `String` | `ST-001` | 조회할 충전소 ID |
 
 ### 요청 예시
 
@@ -170,6 +205,25 @@ GET /api/v1/stations/ST-001
 }
 ```
 
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `stationId` | `string` | `String` | 충전소 식별자 |
+| `name` | `string` | `String` | 충전소명 |
+| `address` | `string` | `String` | 충전소 주소 |
+| `availableCount` | `integer` | `Int` | 이용 가능한 충전기 수 |
+| `totalValidCount` | `integer` | `Int` | 유효한 전체 충전기 수 |
+| `chargers` | `array<object>` | `List<ChargerDto>` | 충전기별 상세 데이터 |
+| `chargers[].chargerId` | `string` | `String` | 충전기 식별자 (앞자리 0 보존) |
+| `chargers[].connectorType` | `string` | `String` | 연결 규격 코드 (예: DC_COMBO) |
+| `chargers[].outputKw` | `number` | `Double?` | 출력(kW); 데이터 미제공 가능 |
+| `chargers[].status` | `string` | `String` | 충전기 상태 코드 문자열 |
+| `chargers[].statusUpdatedAt` | `string (date-time)` | `String` | 해당 충전기 상태 갱신 시각 |
+| `feePerKwh` | `number \| null` | `Double?` | 확인된 원/kWh 단가; 현재 예시 null |
+| `feeAvailable` | `boolean` | `Boolean` | 요금 데이터 제공 여부 |
+| `statusObservedAt` | `string (date-time)` | `String` | 충전소 상태 관측 시각 |
+
 **주의:** 요금은 요구사항에 있으나 첨부 한국환경공단 OpenAPI 가이드의 getChargerInfo/getChargerStatus에는 단가 필드가 확인되지 않는다. 요금 출처가 확정되기 전까지 null로 반환한다. 충전기 상태는 충전 대기(코드 2)만 가용으로 계산한다.
 
 [↑ 목차로 돌아가기](#목차)
@@ -191,11 +245,11 @@ GET /api/v1/stations/ST-001
 
 ### Query 파라미터
 
-| 파라미터 | 예시 | 설명 |
-| --- | --- | --- |
-| `lat` | `37.5500` | 현재 차량 위치의 위도 |
-| `lng` | `127.1400` | 현재 차량 위치의 경도 |
-| `chargeRecommended` | `true` | 프론트가 계산한 충전 권장 여부. true이면 급속 충전소만 후보 |
+| 파라미터 | Kotlin 타입 | 예시 | 설명 |
+| --- | --- | --- | --- |
+| `lat` | `Double` | `37.5500` | 현재 차량 위치의 위도 |
+| `lng` | `Double` | `127.1400` | 현재 차량 위치의 경도 |
+| `chargeRecommended` | `Boolean` | `true` | 프론트가 계산한 충전 권장 여부. true이면 급속 충전소만 후보 |
 
 ### 요청 예시
 
@@ -224,6 +278,22 @@ GET /api/v1/stations/recommendation?lat=37.5500&lng=127.1400&chargeRecommended=t
 }
 ```
 
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `station` | `object` | `RecommendedStationDto` | 추천 충전소 정보; 후보 없음 처리 방식은 미정 |
+| `station.stationId` | `string` | `String` | 추천 충전소 ID |
+| `station.name` | `string` | `String` | 충전소명 |
+| `station.distanceMeters` | `integer` | `Int` | 거리(m) |
+| `station.availableCount` | `integer` | `Int` | 이용 가능한 충전기 수 |
+| `station.visitCount` | `integer` | `Int` | 방문 횟수 |
+| `station.speedCategory` | `string` | `String` | 충전 속도 분류 (예: FAST) |
+| `station.maxOutputKw` | `number` | `Double?` | 최대 출력(kW); 데이터 미제공 가능 |
+| `reasonCode` | `string` | `String` | 추천 사유 코드 (예: VISITS_THEN_DISTANCE) |
+| `fallbackUsed` | `boolean` | `Boolean` | 대체 추천 사용 여부 |
+| `statusObservedAt` | `string (date-time)` | `String` | 충전소 상태 관측 시각 |
+
 **주의:** 후보: 반경 3km, 가용≥1, 운영중지·점검중 제외. chargeRecommended=true이면 급속만 후보. 방문 횟수 내림차순 → 거리 오름차순. 후보가 없으면 3km 내 최단거리 충전소로 대체. 다음 충전일·충전 권장은 프론트에서 계산하며 서버는 요청값을 사용한다.
 
 [↑ 목차로 돌아가기](#목차)
@@ -245,9 +315,9 @@ GET /api/v1/stations/recommendation?lat=37.5500&lng=127.1400&chargeRecommended=t
 
 ### Path 파라미터
 
-| 파라미터 | 예시 | 설명 |
-| --- | --- | --- |
-| `stationId` | `ST-001` | 길 안내 전 상태를 확인할 충전소 ID |
+| 파라미터 | Kotlin 타입 | 예시 | 설명 |
+| --- | --- | --- | --- |
+| `stationId` | `String` | `ST-001` | 길 안내 전 상태를 확인할 충전소 ID |
 
 ### 요청 예시
 
@@ -271,6 +341,16 @@ GET /api/v1/stations/ST-001/navigation-check
   "checkedAt": "2026-11-11T01:31:00+09:00"
 }
 ```
+
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `stationId` | `string` | `String` | 충전소 ID |
+| `navigationAllowed` | `boolean` | `Boolean` | 길 안내 허용 여부 |
+| `reasonCode` | `string` | `String` | 판정 사유 코드 (예: OK) |
+| `latestStatuses` | `array<string>` | `List<String>` | 충전기 상태 문자열 목록 |
+| `checkedAt` | `string (date-time)` | `String` | 상태 확인 시각 |
 
 **주의:** 백엔드는 상태만 확인한다. 목적지 변경과 경로 계산은 NaviHelper를 사용하는 프론트 책임. 이미 선택한 충전소의 상태 변경도 확인해야 한다. 확인 실패 시 허용/차단 정책은 기획 확인 필요.
 
@@ -308,6 +388,19 @@ GET /api/v1/stations/ST-001/navigation-check
 }
 ```
 
+### 요청 JSON Body 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `eventId` | `string` | `String` | 이벤트 고유 ID |
+| `vehicleId` | `string` | `String` | 사전 등록한 Mock 차량 ID |
+| `eventType` | `string` | `String` | 충전 이벤트 유형: START 또는 END (코드 확정 필요) |
+| `occurredAt` | `string (date-time)` | `String` | 이벤트 발생 시각, ISO 8601 |
+| `lat` | `number` | `Double` | 이벤트 위치 위도 |
+| `lng` | `number` | `Double` | 이벤트 위치 경도 |
+| `socPercent` | `integer` | `Int` | 이벤트 시점의 배터리 잔량(%) |
+| `odometerKm` | `number` | `Double` | 이벤트 시점의 누적 주행거리(km) |
+
 ### 응답 JSON
 
 ```json
@@ -319,6 +412,16 @@ GET /api/v1/stations/ST-001/navigation-check
   "dailyDuplicate": false
 }
 ```
+
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `eventId` | `string` | `String` | 클라이언트가 보내는 충전 이벤트 고유 ID |
+| `accepted` | `boolean` | `Boolean` | 서버 수락 여부 |
+| `matchedStationId` | `string \| null` | `String?` | 위치로 매칭된 충전소 ID; 매칭 실패 시 null 가능 |
+| `visitCountAdded` | `integer` | `Int` | 이번 이벤트로 추가된 방문 횟수 (0 또는 1) |
+| `dailyDuplicate` | `boolean` | `Boolean` | 동일 일자·충전소 중복 방문 여부 |
 
 **주의:** REQ_ST_008: 충전 시작 위치가 충전소 반경 100m 이내이고, 같은 충전소 하루 최대 1회. MVP 차량 충전 상태는 Mock이므로 이벤트도 시연용 입력임을 표시. 한 이벤트가 여러 충전소 반경에 해당할 때의 우선순위는 미정.
 
@@ -353,6 +456,16 @@ GET /api/v1/stations/ST-001/navigation-check
 }
 ```
 
+### 요청 JSON Body 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `vehicleId` | `string` | `String` | 사전 등록한 Mock 차량 ID |
+| `recordedAt` | `string (date-time)` | `String` | 차량 측정 시각, ISO 8601 |
+| `socPercent` | `integer` | `Int` | 배터리 잔량(%) |
+| `odometerKm` | `number` | `Double` | 누적 주행거리(km) |
+| `drivableRangeKm` | `integer \| null` | `Int?` | 주행 가능 거리(km); 확보 불가 시 처리 협의 필요 |
+
 ### 응답 JSON
 
 ```json
@@ -362,6 +475,14 @@ GET /api/v1/stations/ST-001/navigation-check
   "recordedAt": "2026-11-11T01:30:00+09:00"
 }
 ```
+
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `snapshotId` | `string` | `String` | 저장된 차량 스냅샷 ID |
+| `saved` | `boolean` | `Boolean` | 저장 성공 여부 |
+| `recordedAt` | `string (date-time)` | `String` | 전달받은 측정 시각, ISO 8601 |
 
 **주의:** 원문 REQ_JD_002는 프론트 구현으로 지정되어 있으며 로컬 DB 금지 요구는 스프레드시트에 없다. 이 API는 대화에서 정한 서버 저장 가정을 적용한 추가 설계. drivableRangeKm의 실제 확보 방법은 SDK/데이터 연동 확인 필요.
 
@@ -384,11 +505,11 @@ GET /api/v1/stations/ST-001/navigation-check
 
 ### Query 파라미터
 
-| 파라미터 | 예시 | 설명 |
-| --- | --- | --- |
-| `vehicleId` | `mock-vehicle-001` | 차량 ID(Mock) |
-| `from` | `2026-10-28` | 조회 시작일(YYYY-MM-DD) |
-| `to` | `2026-11-11` | 조회 종료일(YYYY-MM-DD) |
+| 파라미터 | Kotlin 타입 | 예시 | 설명 |
+| --- | --- | --- | --- |
+| `vehicleId` | `String` | `mock-vehicle-001` | 차량 ID(Mock) |
+| `from` | `String` | `2026-10-28` | 조회 시작일(YYYY-MM-DD) |
+| `to` | `String` | `2026-11-11` | 조회 종료일(YYYY-MM-DD) |
 
 ### 요청 예시
 
@@ -422,6 +543,19 @@ GET /api/v1/vehicles/snapshots?vehicleId=mock-vehicle-001&from=2026-10-28&to=202
 }
 ```
 
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `vehicleId` | `string` | `String` | 조회 대상 차량 ID |
+| `records` | `array<object>` | `List<VehicleSnapshotDto>` | 주행·배터리 스냅샷 목록 |
+| `records[].recordedAt` | `string (date-time)` | `String` | 차량 데이터 측정 시각 |
+| `records[].socPercent` | `integer` | `Int` | 배터리 잔량(%) |
+| `records[].odometerKm` | `number` | `Double` | 누적 주행거리(km) |
+| `records[].drivableRangeKm` | `integer \| null` | `Int?` | 주행 가능 거리(km), SDK 확보 방식 미정 |
+| `retentionDays` | `integer` | `Int` | 서버 기록 보관 일수 |
+| `completeDayCount` | `integer` | `Int` | 자료가 완비된 일자 수 |
+
 **주의:** 14일 미만 기록이면 일평균·예비거리·잔여일수는 산출하지 않는다. 운행하지 않은 날(0km)과 미수집일을 구분해야 하므로 전체 날짜별 수집 여부를 클라이언트에서 판단할 수 있도록 응답 확장 필요. 서버 저장소만으로 완전 오프라인 갱신은 불가능하다.
 
 [↑ 목차로 돌아가기](#목차)
@@ -443,9 +577,9 @@ GET /api/v1/vehicles/snapshots?vehicleId=mock-vehicle-001&from=2026-10-28&to=202
 
 ### Query 파라미터
 
-| 파라미터 | 예시 | 설명 |
-| --- | --- | --- |
-| `vehicleId` | `mock-vehicle-001` | 차량 ID(Mock) |
+| 파라미터 | Kotlin 타입 | 예시 | 설명 |
+| --- | --- | --- | --- |
+| `vehicleId` | `String` | `mock-vehicle-001` | 차량 ID(Mock) |
 
 ### 요청 예시
 
@@ -466,6 +600,16 @@ GET /api/v1/charging-events/latest?vehicleId=mock-vehicle-001
   "distanceSinceChargeKm": 40.4
 }
 ```
+
+### 응답 JSON 필드 타입
+
+| 필드 | JSON 타입 | Kotlin 타입 | 설명 |
+| --- | --- | --- | --- |
+| `vehicleId` | `string` | `String` | 조회 대상 차량 ID |
+| `lastChargeCompletedAt` | `string (date-time) \| null` | `String?` | 마지막 충전 완료 시각; 이력 없음이면 null |
+| `odometerAtLastChargeKm` | `number \| null` | `Double?` | 충전 완료 당시 누적 주행거리(km) |
+| `currentOdometerKm` | `number \| null` | `Double?` | 최근 측정된 누적 주행거리(km) |
+| `distanceSinceChargeKm` | `number \| null` | `Double?` | 마지막 충전 후 주행거리(km) |
 
 **주의:** 충전완료 이벤트가 없거나 Mock 데이터만 있다면 null 또는 Mock 출처 표시가 필요하다. 계산된 충전 후 주행거리는 누적 오도미터의 차분이다.
 
