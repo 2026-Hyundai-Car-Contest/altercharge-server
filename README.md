@@ -32,7 +32,7 @@ MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식�
 | 개발 | `https://localhost:8443` | Docker Compose Caddy. 로컬 CA 신뢰 설정 필요 |
 | 배포 | `https://YOUR_DOMAIN` | 자리표시자. 현재 배포된 주소가 아님 |
 
-기본 HTTPS 포트는 8443이며 `HTTPS_PORT`로 바꿀 수 있다. 앱 8080과 PostgreSQL 5432는 호스트에 공개하지 않는다.
+로컬 초기화는 HTTPS 8443, 운영 예제는 80/443을 사용한다. `HTTPS_PORT`로 로컬 포트를 바꿀 수 있으며 앱 8080과 PostgreSQL 5432는 호스트에 공개하지 않는다.
 
 ## Swagger 문서
 
@@ -593,45 +593,59 @@ Mock 이벤트는 영속 저장되지만 실제 방문 집계에 포함하지 �
 - 주행 중 안내·음성 브리핑·거점 등록·시간대 점유 이력: 주차 화면 MVP 밖 기능.
 - 회원가입·로그인·어드민·차종 제원 API: 현재 구현 범위 밖 기능.
 - 충전 권장 여부·다음 충전일 서버 계산: 프론트 책임.
-- AWS 배포·CD·이미지 레지스트리 게시·자동 릴리스: 별도 작업.
+- 실제 AWS 리소스 생성·배포, 이미지 레지스트리 게시·자동 릴리스: 수행하지 않음. 단일 EC2용 CD 설정은 아래에 제공한다.
 
 ## 로컬 실행·DB 이전·검증
 
-Docker Desktop Linux 엔진, Docker Compose와 로컬 값이 필요하다. 루트에서 한 번 복사하고 .env를 로컬에서 채운다.
+Docker Desktop Linux 엔진, Docker Compose, Python 3가 필요하다. 루트에서 초기화하면 Git에서 제외되는 `.env`가 만들어지고 앱·관리자 DB 비밀번호를 각각 안전한 난수로 생성한다. 기존 파일의 실제 값은 보존하고 누락 키만 추가한다. 로컬은 `APP_DOMAIN=localhost`, `HTTPS_PORT=8443`으로 시작한다.
 
 ```powershell
-Copy-Item .env.example .env
+python scripts/lib/env.py init --file .env --example .env.example --mode local
+# .env의 DATA_GO_KR_SERVICE_KEY=needed를 실제 키로 채운 뒤 실행
+python scripts/lib/env.py validate --file .env --mode local
 ```
 
 | 변수 | 예제·기본값 | 용도 |
 | --- | --- | --- |
+| COMPOSE_PROJECT_NAME | altercharge | Compose 프로젝트·볼륨 이름 |
+| SPRING_PROFILES_ACTIVE | prod | 컨테이너 실행 프로필 |
+| APP_DOMAIN | needed / 로컬 localhost | 운영 실제 도메인, 프로토콜·포트 제외 |
+| APP_PORT | 8080 | 앱 내부 포트 |
+| HTTP_PORT / HTTPS_PORT | 80 / 443 | 운영 외부 포트. 로컬 초기화는 HTTPS 8443 |
+| AWS_REGION | ap-northeast-2 | EC2 준비 시 사용할 기본 리전 |
 | POSTGRES_DB | altercharge | 앱 DB |
-| POSTGRES_USER | altercharge_app | 비관리자 앱 역할. postgres와 달라야 함 |
-| POSTGRES_PASSWORD | 로컬 강한 값 입력 | 앱 계정 비밀번호 |
-| POSTGRES_ADMIN_PASSWORD | 별도 강한 값 입력 | DB 초기화 관리자 비밀번호 |
-| DATA_GO_KR_SERVICE_KEY | YOUR_SERVICE_KEY_HERE | 서버 전용 키. 실제 키를 문서·커밋에 넣지 않음 |
+| POSTGRES_USER | altercharge | 비관리자 앱 역할. postgres와 달라야 함 |
+| POSTGRES_PASSWORD | 예제 needed / 초기화 시 자동 생성 | 앱 계정 비밀번호 |
+| POSTGRES_ADMIN_PASSWORD | 예제 needed / 초기화 시 별도 생성 | 기존 권한 분리를 유지하는 DB 초기화 관리자 비밀번호 |
+| POSTGRES_PORT | 5432 | DB 내부 포트 |
+| DATA_GO_KR_BASE_URL | https://apis.data.go.kr/B552584/EvCharger | HTTPS 원본 API 주소 |
+| DATA_GO_KR_SERVICE_KEY | needed | 서버 전용 실제 키 입력 전 실행 불가 |
+| DATA_GO_KR_DATA_TYPE | XML | 원본 데이터 형식 |
 | DATA_GO_KR_ZCODES | 11 | 수집 지역 쉼표 목록 |
-| DATA_GO_KR_ENABLED | true | 키 없이 구동 점검 시 false |
+| DATA_GO_KR_STATUS_REFRESH_SECONDS | 300 | 상태 수집 간격, 최소 5분 |
+| DATA_GO_KR_INFO_REFRESH_SECONDS | 86400 | 메타데이터 수집 간격, 최소 하루 |
+| DATA_GO_KR_ENABLED | true | 수집 활성화. 격리된 검증 환경에서만 false |
 | DATA_GO_KR_NUM_OF_ROWS | 9999 | 한 요청 행 수, 10~9999 |
 | DATA_GO_KR_DAILY_BUDGET | 900 | 앱 하루 최대 호출 수, 최대 900 |
 | DATA_GO_KR_METADATA_BUDGET | 100 | 메타데이터 하루 예산 |
-| HTTPS_PORT | 8443 | 호스트 HTTPS 포트 |
+| SPRING_JPA_HIBERNATE_DDL_AUTO | validate | Flyway가 만든 스키마와 엔티티 검증 |
 | STATION_STATUS_MAX_AGE_MINUTES | 15 | 길 안내 충전기 관측 유효기간, 1~1440분 |
 | HISTORY_RETENTION_DAYS | 56 | 스냅샷 보관기간, 1~56일 |
 | HISTORY_MAX_FUTURE_MINUTES | 5 | 저장 시각의 미래 허용 범위, 0~60분 |
 | FLYWAY_ADOPT_LEGACY_SCHEMA | false | 아래 기존 DB 이전 때만 일시 사용 |
 
-키는 디코딩 또는 한 번 URL 인코딩된 형태를 사용할 수 있다. 채팅 등으로 실제 키가 노출되었다면 재발급한다. .env·개인키·덤프는 Git에 넣지 않는다. 앱 DB 사용자는 해당 DB 스키마 권한만 갖고 관리자와 분리한다.
+키는 디코딩 또는 한 번 URL 인코딩된 형태를 사용할 수 있다. `.env`·개인키·덤프는 Git에 넣지 않는다. 앱 DB 사용자는 해당 DB 스키마 권한만 갖고 관리자와 분리한다. dotenv는 셸 코드로 실행하지 않으며 여러 줄 값과 변수 참조는 사용하지 않는다. 비밀번호 등에 `$`가 있으면 작은따옴표로 감싼 리터럴 값을 사용한다. Compose를 직접 실행할 때 같은 이름의 셸 환경변수를 별도로 내보내지 않는다.
 
 ```bash
-docker compose up -d --build
-docker compose ps
-docker compose logs --tail=100 app
-docker compose logs --tail=100 caddy
-docker compose down
+python3 scripts/lib/env.py validate --file .env --mode local
+docker compose --env-file .env -f compose.yaml up -d --build --wait
+docker compose --env-file .env -f compose.yaml ps
+docker compose --env-file .env -f compose.yaml logs --tail=100 app
+docker compose --env-file .env -f compose.yaml logs --tail=100 caddy
+docker compose --env-file .env -f compose.yaml down
 ```
 
-앱은 PostgreSQL health 이후, Caddy는 앱 health 이후 시작한다. down은 DB·Caddy CA named volume을 유지한다. **down -v는 DB와 CA를 삭제한다.** 계정 초기화는 새 DB 볼륨의 첫 실행 때만 적용하므로 .env 암호만 바꿔도 기존 계정의 암호가 바뀌지는 않는다.
+Windows에서는 `python3` 대신 `python`을 사용할 수 있다. 앱은 PostgreSQL health 이후, Caddy는 앱 health 이후 시작한다. `down`은 DB·Caddy CA named volume을 유지한다. 볼륨 삭제 옵션은 사용하지 않는다. 계정 초기화는 새 DB 볼륨의 첫 실행 때만 적용하므로 `.env` 암호만 바꿔도 기존 계정의 암호가 바뀌지는 않는다. 기존 볼륨이 있다면 기존 DB 비밀번호와 계정명을 유지한다.
 
 Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1과 V2가 적용되어 캐시를 유지하고 기록 테이블·시드를 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
 
@@ -640,7 +654,7 @@ Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한�
 로컬 HTTPS는 Caddy tls internal로 발급한다. 공개 루트 CA를 복사하고 요청별로 신뢰할 수 있다.
 
 ```powershell
-docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./local-ca.crt
+docker compose --env-file .env -f compose.yaml cp caddy:/data/caddy/pki/authorities/local/root.crt ./local-ca.crt
 curl.exe --cacert ./local-ca.crt https://localhost:8443/actuator/health
 curl.exe --cacert ./local-ca.crt https://localhost:8443/v3/api-docs
 ```
@@ -661,8 +675,51 @@ cd altercharger-server
 .\gradlew.bat bootJar --no-daemon -x test
 ```
 
-Linux/macOS에서는 ./gradlew를 사용한다. ci 프로필과 가짜 XML·시드로 실제 환경공단 호출·키·AWS 자격증명 없이 검증한다. CI는 main의 push·pull_request에서 테스트·JAR 패키징만 수행한다. Swagger 실제 생성과 정확한 8개 업무 operation은 로컬 스모크에서 확인한다. 작업하는 Codex의 한국어 Conventional Commits 규칙은 [AGENTS.md](AGENTS.md)에 둔다.
+Linux/macOS에서는 ./gradlew를 사용한다. ci 프로필과 가짜 XML·시드로 실제 환경공단 호출·키·AWS 자격증명 없이 검증한다. CI는 main의 push·pull_request에서 테스트·JAR 패키징을 수행한다. HTTP 필드·범위 검증은 Bean Validation, 도메인 정책은 서비스, XML 검증은 수신 경계에서 처리한다. Swagger 실제 생성과 정확한 8개 업무 operation은 로컬 스모크에서 확인한다. 작업하는 Codex의 한국어 Conventional Commits 규칙은 [AGENTS.md](AGENTS.md)에 둔다.
 
 ## 배포 상태
 
-현재 AWS URL·배포·CD는 설정하지 않았다. 배포 도메인과 CD 세부 설정은 별도 `CODEX_AWS_EC2_CD_SETUP.md` 지시서의 후속 작업으로 진행하며, 이 문서의 YOUR_DOMAIN은 배포 완료 후 실제 도메인으로 교체한다.
+**CD 파일 준비 완료 / 실배포 미실행.** `YOUR_DOMAIN`은 자리표시자다. GitHub Variable `DEPLOY_ENABLED`가 없거나 `false`이면 배포 작업은 실행되지 않는다. AWS 리소스·DNS·GitHub Secrets는 이 저장소 작업에서 생성하거나 변경하지 않았다.
+
+구성은 EC2 1대의 Docker Compose(app + PostgreSQL + Caddy)다. Ubuntu LTS, SSH 사용자 `ubuntu`, `/opt/altercharge`, 리전 `ap-northeast-2`를 기본으로 한다. GitHub Actions가 Java 21 실행 JAR를 빌드해 SHA별 staging으로 전송하고 EC2는 `Dockerfile.runtime`으로 JAR 실행 이미지만 만든다. 소스를 서버에서 컴파일하지 않는다.
+
+EC2를 준비하고 저장소의 `.env.example`, `scripts/`, `docker/postgres/10-create-app-user.sh`를 서버 작업 디렉터리에 둔 뒤 최초 한 번 실행한다. 실행 전 코드와 호스트를 확인한다.
+
+```bash
+sudo bash scripts/bootstrap-ec2.sh
+```
+
+부트스트랩은 Docker Engine·Compose·rsync·curl·Python을 준비하고 `/opt/altercharge/.env`의 신규 DB 비밀번호를 자동 생성한다. 기존 `.env`·비밀번호·DB 볼륨은 보존한다. 기존 DB 볼륨이 있는데 비밀번호가 없으면 자동 교체하지 않으므로 기존 값을 복구해야 한다. Docker 그룹 변경 후 `ubuntu`로 다시 로그인한다. 운영 파일에 `APP_DOMAIN`과 `DATA_GO_KR_SERVICE_KEY`의 실제 값을 채우고 검증한다. 로컬 `.env`를 서버로 복사하지 않는다.
+
+```bash
+python3 /opt/altercharge/scripts/lib/env.py validate --file /opt/altercharge/.env --mode production
+```
+
+운영 DNS는 EC2를 가리켜야 한다. 보안 그룹은 HTTP 80·HTTPS 443을 공개하고 SSH 22는 배포에 필요한 신뢰 범위로 제한한다. 앱 8080·DB 5432는 외부에 공개하지 않는다. Caddy는 실제 도메인으로 공인 TLS를 발급한다. Mock ID만 사용하는 쓰기 API에는 실제 개인정보를 넣지 않으며, 외부 공개 전 인증·접근통제와 Swagger 공개 정책을 정해야 한다.
+
+GitHub 저장소에서 다음 값을 설정한 뒤 준비가 끝나면 `DEPLOY_ENABLED=true`로 전환한다. DB 비밀번호·환경공단 키는 GitHub가 아닌 EC2의 `.env`에만 둔다.
+
+| 종류 | 이름 | 입력 |
+| --- | --- | --- |
+| Secret | EC2_HOST | 실제 EC2 공인 IP 또는 DNS |
+| Secret | EC2_SSH_PRIVATE_KEY | 배포용 SSH 개인키 |
+| Secret | EC2_SSH_KNOWN_HOSTS | 별도 신뢰 경로로 확인한 서버 호스트 공개키의 known_hosts 항목 |
+| Variable | EC2_USER | ubuntu |
+| Variable | DEPLOY_ENABLED | 최초 false, 준비 후 true |
+
+기존 `CI`의 main push가 성공하면 현재 main의 정확한 SHA와 원본 저장소를 다시 확인한 뒤 CD가 실행된다. 수동 실행도 동일 SHA의 성공 CI가 필요하다. GitHub CLI 설치·로그인 후 개발자 PC에서 다음 한 줄로 요청할 수 있다(Git Bash/Linux/macOS).
+
+```bash
+./scripts/deploy.sh
+```
+
+서버는 SSH 호스트 키를 엄격히 검사하며 SHA별 허용 파일만 받는다. `.env`와 SSH 개인키는 전송 묶음에 포함하지 않는다. 최초에는 staged SHA를 명시하고, 이후에는 `pending.sha`를 사용하는 한 줄 재실행도 가능하다.
+
+```bash
+bash /opt/altercharge/staging/<40자리-SHA>/scripts/deploy-ec2.sh <40자리-SHA>
+bash /opt/altercharge/scripts/deploy-ec2.sh
+```
+
+배포는 `flock` 잠금, 이전 정상 JAR·설정 백업(최근 2개), Compose `up -d --build --wait`, 공인 HTTPS `/actuator/health` 순서로 진행한다. 환경변수는 `/opt/altercharge/.env`만 사용한다. 실패하면 이전 앱·프록시 설정을 복구하고 실패 코드로 종료한다. 첫 배포 실패에는 이전 정상본이 없어 앱·프록시만 중지한다. DB 스키마는 자동 롤백하지 않으므로 마이그레이션은 이전 앱과 호환되게 작성하고 별도로 DB를 백업한다. `altercharge_postgres_data`, `altercharge_caddy_data`, `altercharge_caddy_config` 볼륨은 유지한다.
+
+배포 후 확인 주소는 `https://YOUR_DOMAIN/actuator/health`, `https://YOUR_DOMAIN/swagger-ui/index.html`, `https://YOUR_DOMAIN/v3/api-docs`다. 실제 도메인이 확정되고 배포를 확인하면 위 링크를 교체한다.
