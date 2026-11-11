@@ -1,6 +1,9 @@
 package com.server.altercharger_server.collector;
 
 import com.server.altercharger_server.collector.EvChargerXmlParser.Item;
+import com.server.altercharger_server.collector.persistence.CollectorLedger;
+import com.server.altercharger_server.collector.persistence.CollectorLedger.State;
+import com.server.altercharger_server.collector.persistence.CollectorLedger.Usage;
 import com.server.altercharger_server.station.StationStore;
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -18,20 +21,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Component
-@EnableScheduling
 @ConditionalOnProperty(name = "app.collector.enabled", havingValue = "true", matchIfMissing = true)
 public class StationCollector {
     private static final Logger log = LoggerFactory.getLogger(StationCollector.class);
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     private static final long LOCK_ID = 462932114;
     private final DataSource dataSource;
-    private final JdbcTemplate jdbc;
+    private final CollectorLedger ledger;
     private final StationStore store;
     private final EvChargerClient client;
     private final String serviceKey;
@@ -41,14 +41,14 @@ public class StationCollector {
     private final int metadataBudget;
     private boolean missingKeyReported;
 
-    public StationCollector(DataSource dataSource, JdbcTemplate jdbc, StationStore store, EvChargerClient client,
+    public StationCollector(DataSource dataSource, CollectorLedger ledger, StationStore store, EvChargerClient client,
                             @Value("${app.collector.service-key:${DATA_GO_KR_SERVICE_KEY:}}") String serviceKey,
                             @Value("${app.collector.zcodes:${DATA_GO_KR_ZCODES:11}}") String zcodes,
                             @Value("${app.collector.rows:9999}") int rows,
                             @Value("${app.collector.daily-budget:900}") int dailyBudget,
                             @Value("${app.collector.metadata-budget:100}") int metadataBudget) {
         this.dataSource = dataSource;
-        this.jdbc = jdbc;
+        this.ledger = ledger;
         this.store = store;
         this.client = client;
         this.serviceKey = serviceKey.strip();
@@ -98,10 +98,7 @@ public class StationCollector {
     private void runIfDue(String task, Duration interval) {
         if (task.equals("status") && !store.hasCollectedData()) return;
         OffsetDateTime now = now();
-        State state = jdbc.queryForObject("""
-                SELECT succeeded_at, retry_after, consecutive_failures FROM collection_state WHERE task = ?
-                """, (rs, row) -> new State(rs.getObject(1, OffsetDateTime.class),
-                rs.getObject(2, OffsetDateTime.class), rs.getInt(3)), task);
+        State state = ledger.state(task);
         if (state == null || state.retryAfter() != null && now.isBefore(state.retryAfter())
                 || state.succeededAt() != null && now.isBefore(state.succeededAt().plus(interval))) return;
         try {
@@ -124,8 +121,7 @@ public class StationCollector {
             OffsetDateTime retryAfter = ex instanceof BudgetExhausted
                     ? LocalDate.now(SEOUL).plusDays(1).atStartOfDay(SEOUL).toOffsetDateTime()
                     : now().plusMinutes(Math.min(360, 5L << (failures - 1)));
-            jdbc.update("UPDATE collection_state SET retry_after = ?, consecutive_failures = ? WHERE task = ?",
-                    retryAfter, failures, task);
+            ledger.defer(task, retryAfter, failures);
             log.warn("Collector {} deferred until {}; existing cache retained ({})", task, retryAfter,
                     ex.getClass().getSimpleName());
         }
@@ -183,21 +179,13 @@ public class StationCollector {
     }
 
     private Usage usage() {
-        LocalDate day = LocalDate.now(SEOUL);
-        jdbc.update("INSERT INTO api_daily_usage(usage_date) VALUES (?) ON CONFLICT DO NOTHING", day);
-        return jdbc.queryForObject("SELECT calls, metadata_calls FROM api_daily_usage WHERE usage_date = ?",
-                (rs, row) -> new Usage(rs.getInt(1), rs.getInt(2)), day);
+        return ledger.usage(LocalDate.now(SEOUL));
     }
 
     private void reserveCall(String task) {
-        LocalDate day = LocalDate.now(SEOUL);
-        jdbc.update("INSERT INTO api_daily_usage(usage_date) VALUES (?) ON CONFLICT DO NOTHING", day);
-        boolean metadata = task.equals("metadata");
-        int changed = jdbc.update("""
-                UPDATE api_daily_usage SET calls = calls + 1, metadata_calls = metadata_calls + ?
-                WHERE usage_date = ? AND calls < ? AND (NOT ? OR metadata_calls < ?)
-                """, metadata ? 1 : 0, day, dailyBudget, metadata, metadataBudget);
-        if (changed != 1) throw new BudgetExhausted();
+        if (!ledger.reserve(LocalDate.now(SEOUL), task.equals("metadata"), dailyBudget, metadataBudget)) {
+            throw new BudgetExhausted();
+        }
     }
 
     private boolean lock(Connection connection, boolean acquire) throws SQLException {
@@ -214,8 +202,6 @@ public class StationCollector {
         return OffsetDateTime.now(SEOUL);
     }
 
-    private record State(OffsetDateTime succeededAt, OffsetDateTime retryAfter, int failures) { }
-    private record Usage(int calls, int metadataCalls) { }
     private static class BudgetExhausted extends CollectionException {
         BudgetExhausted() {
             super("Daily call budget exhausted");

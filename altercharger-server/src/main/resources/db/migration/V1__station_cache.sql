@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS collection_state (
 );
 INSERT INTO collection_state(task) VALUES ('metadata'), ('status') ON CONFLICT DO NOTHING;
 
+-- Existing JDBC cache installations keep the same table names, keys, and column types.
 -- Counts are durable and shared by every collector instance using this database.
 CREATE TABLE IF NOT EXISTS api_daily_usage (
     usage_date date PRIMARY KEY,
