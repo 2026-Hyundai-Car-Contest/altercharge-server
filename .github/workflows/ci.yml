@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: altercharger-server
+    env:
+      SPRING_PROFILES_ACTIVE: ci
+      DATA_GO_KR_ENABLED: "false"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Java 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            altercharger-server/*.gradle
+            altercharger-server/gradle/wrapper/gradle-wrapper.properties
+      - name: Run required tests
+        run: ./gradlew test --no-daemon -Dspring.profiles.active=ci
+      - name: Verify application packaging
+        run: ./gradlew bootJar --no-daemon -x test
