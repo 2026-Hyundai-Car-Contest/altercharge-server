@@ -1,5 +1,6 @@
 package com.server.altercharger_server.station;
 
+import com.server.altercharger_server.history.VisitService;
 import com.server.altercharger_server.station.StationStore.Charger;
 import com.server.altercharger_server.station.StationStore.Station;
 import java.time.OffsetDateTime;
@@ -38,7 +39,9 @@ class StationQueryServiceTests {
                 new Station("outside", "강동 외곽", "서울 강동", 37.60, 127.14, List.of()),
                 new Station("B", "강동 두번째", "서울 강동", 37.55, 127.14, List.of()),
                 station));
-        StationQueryService service = new StationQueryService(store);
+        VisitService visits = mock(VisitService.class);
+        when(visits.realVisitCounts("mock-user-001")).thenReturn(java.util.Map.of());
+        StationQueryService service = new StationQueryService(store, visits);
 
         var detail = service.detail("A");
         assertEquals(1, detail.availableCount());

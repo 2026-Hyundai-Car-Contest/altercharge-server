@@ -1,6 +1,7 @@
 package com.server.altercharger_server.station;
 
 import com.server.altercharger_server.common.error.ApiErrorAdvice;
+import com.server.altercharger_server.history.VisitService;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,7 @@ class StationControllerTests {
     @BeforeEach
     void setUp() {
         store = mock(StationStore.class);
-        mvc = MockMvcBuilders.standaloneSetup(new StationController(new StationQueryService(store)))
+        mvc = MockMvcBuilders.standaloneSetup(new StationController(new StationQueryService(store, mock(VisitService.class))))
                 .setControllerAdvice(new ApiErrorAdvice()).build();
     }
 
