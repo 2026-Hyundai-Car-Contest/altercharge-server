@@ -1,5 +1,9 @@
 # AlterCharge 백엔드 API 명세서
 
+- 배포 API 기본 주소: [https://15-164-244-37.sslip.io/api/v1](https://15-164-244-37.sslip.io/api/v1)
+- Swagger UI: [https://15-164-244-37.sslip.io/swagger-ui/index.html](https://15-164-244-37.sslip.io/swagger-ui/index.html)
+- OpenAPI JSON: [https://15-164-244-37.sslip.io/v3/api-docs](https://15-164-244-37.sslip.io/v3/api-docs)
+
 버전 **0.2.0** · 요구사항정의서 v0.1(2026-11-10) 기반 · 업무 REST API **01~08 구현**. Java 21, Spring Boot 4.1.2, Gradle Wrapper 9.8.2, Spring Data JPA, PostgreSQL, Flyway를 사용한다. 아래 요청·응답의 충전소, 이벤트, 거리, 시각은 모두 가상의 테스트 데이터다.
 
 MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식과 출력별 속도 구간은 기존 협업 설계안에 따른 구현 가정이다. 원문에서 프론트 담당인 충전 권장 여부·다음 충전일·화면 문구를 서버가 계산하지 않는다. 기존 API 초안 문서는 삭제했으며 현재 계약은 이 문서와 실제 OpenAPI를 기준으로 한다.
@@ -12,14 +16,14 @@ MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식�
 - [Swagger 문서](#swagger-문서)
 - [API 요약](#api-요약)
 - [공통 타입·오류·코드](#공통-타입오류코드)
-- [01. 주변 충전소 목록·검색](#api-01)
-- [02. 충전소 상세·충전기 상태](#api-02)
-- [03. 추천 충전소 1곳](#api-03)
-- [04. 길 안내 직전 상태 확인](#api-04)
-- [05. 충전 시작·완료 이벤트](#api-05)
-- [06. 차량 스냅샷 저장](#api-06)
-- [07. 최근 차량 기록](#api-07)
-- [08. 최근 충전 완료 이력](#api-08)
+- [01. 주변 충전소 목록·검색](#api-01) — `GET https://15-164-244-37.sslip.io/api/v1/stations`
+- [02. 충전소 상세·충전기 상태](#api-02) — `GET https://15-164-244-37.sslip.io/api/v1/stations/{stationId}`
+- [03. 추천 충전소 1곳](#api-03) — `GET https://15-164-244-37.sslip.io/api/v1/stations/recommendation`
+- [04. 길 안내 직전 상태 확인](#api-04) — `GET https://15-164-244-37.sslip.io/api/v1/stations/{stationId}/navigation-check`
+- [05. 충전 시작·완료 이벤트](#api-05) — `POST https://15-164-244-37.sslip.io/api/v1/charging-events`
+- [06. 차량 스냅샷 저장](#api-06) — `POST https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots`
+- [07. 최근 차량 기록](#api-07) — `GET https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots`
+- [08. 최근 충전 완료 이력](#api-08) — `GET https://15-164-244-37.sslip.io/api/v1/charging-events/latest`
 - [환경공단 수집·캐시·Mock 정책](#환경공단-수집캐시mock-정책)
 - [1차 제외 범위](#1차-제외-범위)
 - [로컬 실행·DB 이전·검증](#로컬-실행db-이전검증)
@@ -29,31 +33,32 @@ MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식�
 
 | 환경 | 주소 | 상태 |
 | --- | --- | --- |
-| 개발 | `https://localhost:8443` | Docker Compose Caddy. 로컬 CA 신뢰 설정 필요 |
-| 배포 | `https://YOUR_DOMAIN` | 자리표시자. 현재 배포된 주소가 아님 |
+| 운영 | [https://15-164-244-37.sslip.io](https://15-164-244-37.sslip.io) | 확정된 공개 호스트. 이번 변경의 배포 여부는 아래 배포 상태 참조 |
+| 로컬 전용 | `https://localhost:8443` | Docker Compose Caddy. 로컬 CA 신뢰 설정 필요 |
 
-로컬 초기화는 HTTPS 8443, 운영 예제는 80/443을 사용한다. `HTTPS_PORT`로 로컬 포트를 바꿀 수 있으며 앱 8080과 PostgreSQL 5432는 호스트에 공개하지 않는다.
+운영 API 접두사는 `https://15-164-244-37.sslip.io/api/v1`이다. 호스트 이름은 EC2 공인 IP `15.164.244.37`에 의존하므로 공인 IP가 바뀌면 sslip.io 주소와 설정·링크도 확인해야 한다. 로컬 초기화는 HTTPS 8443, 운영은 80/443을 사용한다. `HTTPS_PORT`로 로컬 포트를 바꿀 수 있으며 앱 8080과 PostgreSQL 5432는 호스트에 공개하지 않는다.
 
 ## Swagger 문서
 
-- 로컬 UI: [Swagger UI](https://localhost:8443/swagger-ui/index.html), 호환 경로 `https://localhost:8443/swagger-ui.html`
-- 로컬 JSON: [OpenAPI JSON](https://localhost:8443/v3/api-docs)
-- 배포 후: [배포 후 Swagger UI](https://YOUR_DOMAIN/swagger-ui/index.html), [OpenAPI JSON](https://YOUR_DOMAIN/v3/api-docs)
+- 운영 UI: [Swagger UI](https://15-164-244-37.sslip.io/swagger-ui/index.html), 호환 경로 `https://15-164-244-37.sslip.io/swagger-ui.html`
+- 운영 JSON: [OpenAPI JSON](https://15-164-244-37.sslip.io/v3/api-docs)
+- 로컬 전용 UI: [Swagger UI](https://localhost:8443/swagger-ui/index.html), 호환 경로 `https://localhost:8443/swagger-ui.html`
+- 로컬 전용 JSON: [OpenAPI JSON](https://localhost:8443/v3/api-docs)
 
-`YOUR_DOMAIN` 링크는 배포 전 자리표시자다. 실제 도메인을 정하면 이 문서에서 교체한다. Swagger의 서버 주소는 상대 경로 `/`를 사용하므로 현재 접속한 HTTPS 호스트·포트를 따른다. 로컬 브라우저의 Try it out에도 Caddy 공개 루트 CA 신뢰 설정이 필요하다.
+Swagger 서버 목록은 상대 경로 `/`를 기본으로 하여 현재 접속한 HTTPS 호스트·포트를 따르고, 운영 절대 URL도 별도 선택할 수 있다. 로컬에서 Try it out을 실행할 때는 `/`를 선택하고 로컬 Caddy 공개 루트 CA를 신뢰해야 한다. Caddy의 HTTPS 전달과 Spring forwarded headers 설정은 유지한다.
 
 ## API 요약
 
 | 번호 | Method | URI | 기능 | 요구사항 ID |
 | --- | --- | --- | --- | --- |
-| [01](#api-01) | GET | `/api/v1/stations` | 주변 충전소 목록·검색 | REQ_ST_001, REQ_SL_001, REQ_SL_002, REQ_SL_004, REQ_SL_005, REQ_VS_006, REQ_CM_006 |
-| [02](#api-02) | GET | `/api/v1/stations/{stationId}` | 충전소·충전기 상세 | REQ_ST_007, REQ_SL_001 |
-| [03](#api-03) | GET | `/api/v1/stations/recommendation` | 방문·거리 기준 추천 1곳 | REQ_ST_005, REQ_ST_006, REQ_ST_007 |
-| [04](#api-04) | GET | `/api/v1/stations/{stationId}/navigation-check` | 목적지 안내 전 상태 판정 | REQ_EX_004, REQ_BR_004, REQ_BR_005 |
-| [05](#api-05) | POST | `/api/v1/charging-events` | 충전 시작·완료 이벤트 저장 | REQ_ST_008, REQ_VS_005, REQ_LG_002 |
-| [06](#api-06) | POST | `/api/v1/vehicles/snapshots` | 차량 상태·누적거리 저장 | REQ_JD_002, REQ_VS_001, REQ_VS_004 |
-| [07](#api-07) | GET | `/api/v1/vehicles/snapshots` | 최대 8주 차량 기록 | REQ_JD_002, REQ_LG_002, REQ_CM_006 |
-| [08](#api-08) | GET | `/api/v1/charging-events/latest` | 최근 충전 완료·거리 차분 | REQ_VS_005, REQ_LG_002 |
+| [01](#api-01) | GET | `https://15-164-244-37.sslip.io/api/v1/stations` | 주변 충전소 목록·검색 | REQ_ST_001, REQ_SL_001, REQ_SL_002, REQ_SL_004, REQ_SL_005, REQ_VS_006, REQ_CM_006 |
+| [02](#api-02) | GET | `https://15-164-244-37.sslip.io/api/v1/stations/{stationId}` | 충전소·충전기 상세 | REQ_ST_007, REQ_SL_001 |
+| [03](#api-03) | GET | `https://15-164-244-37.sslip.io/api/v1/stations/recommendation` | 방문·거리 기준 추천 1곳 | REQ_ST_005, REQ_ST_006, REQ_ST_007 |
+| [04](#api-04) | GET | `https://15-164-244-37.sslip.io/api/v1/stations/{stationId}/navigation-check` | 목적지 안내 전 상태 판정 | REQ_EX_004, REQ_BR_004, REQ_BR_005 |
+| [05](#api-05) | POST | `https://15-164-244-37.sslip.io/api/v1/charging-events` | 충전 시작·완료 이벤트 저장 | REQ_ST_008, REQ_VS_005, REQ_LG_002 |
+| [06](#api-06) | POST | `https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots` | 차량 상태·누적거리 저장 | REQ_JD_002, REQ_VS_001, REQ_VS_004 |
+| [07](#api-07) | GET | `https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots` | 최대 8주 차량 기록 | REQ_JD_002, REQ_LG_002, REQ_CM_006 |
+| [08](#api-08) | GET | `https://15-164-244-37.sslip.io/api/v1/charging-events/latest` | 최근 충전 완료·거리 차분 | REQ_VS_005, REQ_LG_002 |
 
 모든 GET은 Body 없이 Path·Query를 사용한다. POST 요청과 모든 업무 응답은 `application/json`이다. Actuator health와 Swagger는 업무 API 8개 외의 구동·문서 경로다.
 
@@ -138,7 +143,7 @@ MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식�
 
 요구사항: `REQ_ST_001`, `REQ_SL_001`, `REQ_SL_002`, `REQ_SL_004`, `REQ_SL_005`, `REQ_VS_006`, `REQ_CM_006`. PostgreSQL 캐시에서 반경 내 충전소를 검색한다. 요청마다 환경공단 API를 호출하지 않는다.
 
-`GET /api/v1/stations`
+`GET https://15-164-244-37.sslip.io/api/v1/stations`
 
 | Query | JSON 의미 타입 | Kotlin | 필수 | 예시·기본값 | 설명 |
 | --- | --- | --- | --- | --- | --- |
@@ -150,8 +155,8 @@ MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식�
 | size | integer | `Int` | 아니오 | 기본 20 | 1~200. 내부 DB 응답 단위 |
 
 ```http
-GET /api/v1/stations?lat=37.5500&lng=127.1400&radiusKm=3&keyword=&page=0&size=20 HTTP/1.1
-Host: localhost:8443
+GET https://15-164-244-37.sslip.io/api/v1/stations?lat=37.5500&lng=127.1400&radiusKm=3&keyword=&page=0&size=20 HTTP/1.1
+Host: 15-164-244-37.sslip.io
 ```
 
 Haversine 직선거리로 반경 필터링한 뒤 거리 오름차순 → stationId 오름차순으로 정렬하고 페이지를 나눈다.
@@ -202,15 +207,15 @@ Haversine 직선거리로 반경 필터링한 뒤 거리 오름차순 → statio
 
 요구사항: `REQ_ST_007`, `REQ_SL_001`. 원본 충전소와 충전기 상태를 조회한다. 요금은 1차 제외다.
 
-`GET /api/v1/stations/{stationId}`
+`GET https://15-164-244-37.sslip.io/api/v1/stations/{stationId}`
 
 | Path | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
 | --- | --- | --- | --- | --- | --- |
 | stationId | string | `String` | 예 | ST-001 | 실제 요청은 환경공단 statId 사용 |
 
 ```http
-GET /api/v1/stations/ST-001 HTTP/1.1
-Host: localhost:8443
+GET https://15-164-244-37.sslip.io/api/v1/stations/ST-001 HTTP/1.1
+Host: 15-164-244-37.sslip.io
 ```
 
 ```json
@@ -263,7 +268,7 @@ Host: localhost:8443
 
 요구사항: `REQ_ST_005`, `REQ_ST_006`, `REQ_ST_007`. 프론트의 충전 권장 판정값을 받아 서버 캐시의 후보 1곳을 고른다.
 
-`GET /api/v1/stations/recommendation`
+`GET https://15-164-244-37.sslip.io/api/v1/stations/recommendation`
 
 | Query | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
 | --- | --- | --- | --- | --- | --- |
@@ -272,8 +277,8 @@ Host: localhost:8443
 | chargeRecommended | boolean | `Boolean` | 예 | true | 프론트 판정값. 서버 재계산 없음 |
 
 ```http
-GET /api/v1/stations/recommendation?lat=37.5500&lng=127.1400&chargeRecommended=true HTTP/1.1
-Host: localhost:8443
+GET https://15-164-244-37.sslip.io/api/v1/stations/recommendation?lat=37.5500&lng=127.1400&chargeRecommended=true HTTP/1.1
+Host: 15-164-244-37.sslip.io
 ```
 
 3km 이내에서 가용 충전기가 1개 이상인 충전소를 검토한다. `chargeRecommended=true`면 **가용 충전기 중 출력 50kW 이상**이 있어야 하며, false면 완속도 후보에 포함한다. 검증된 사용자별 실제 방문 횟수 내림차순 → 거리 오름차순 → stationId 오름차순이다. 방문 원천이 없으면 비교 계산에만 0을 쓰고 응답은 `null`을 유지한다.
@@ -322,15 +327,15 @@ Host: localhost:8443
 
 요구사항: `REQ_EX_004`, `REQ_BR_004`, `REQ_BR_005`. 저장된 상태와 관측 시각으로 안내 허용 여부만 판단한다. 경로 생성·목적지 변경은 프론트 Pleos NaviHelper가 담당한다.
 
-`GET /api/v1/stations/{stationId}/navigation-check`
+`GET https://15-164-244-37.sslip.io/api/v1/stations/{stationId}/navigation-check`
 
 | Path | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
 | --- | --- | --- | --- | --- | --- |
 | stationId | string | `String` | 예 | ST-001 | 환경공단 원본 statId |
 
 ```http
-GET /api/v1/stations/ST-001/navigation-check HTTP/1.1
-Host: localhost:8443
+GET https://15-164-244-37.sslip.io/api/v1/stations/ST-001/navigation-check HTTP/1.1
+Host: 15-164-244-37.sslip.io
 ```
 
 충전기별 관측 시각이 현재부터 `STATION_STATUS_MAX_AGE_MINUTES`(기본 15분) 이내이고 상태가 AVAILABLE이면 다른 충전기가 오래됐어도 허용한다. 오래된 AVAILABLE만으로는 허용하지 않는다. 허용 가능한 가용 충전기가 없으면 **관측시각 누락·미래·만료(STATUS_STALE) → 운영 중지 → 점검 → 통신 이상 → 알 수 없음·미확인 → 충전 중·예약 중** 순으로 대표 차단 사유를 정한다.
@@ -369,7 +374,7 @@ Host: localhost:8443
 
 요구사항: `REQ_ST_008`, `REQ_VS_005`, `REQ_LG_002`. 시연용 이벤트를 저장하며 COMPLETE는 API 08의 최근 충전 기록에 사용한다.
 
-`POST /api/v1/charging-events`
+`POST https://15-164-244-37.sslip.io/api/v1/charging-events`
 
 | JSON Body | JSON | Kotlin | 필수 | 예시·기본값 | 설명 |
 | --- | --- | --- | --- | --- | --- |
@@ -383,8 +388,8 @@ Host: localhost:8443
 | odometerKm | number/null | `Double?` | 아니오 | 20350.4 / null | 누적거리(km), 0 이상 |
 
 ```http
-POST /api/v1/charging-events HTTP/1.1
-Host: localhost:8443
+POST https://15-164-244-37.sslip.io/api/v1/charging-events HTTP/1.1
+Host: 15-164-244-37.sslip.io
 Content-Type: application/json
 
 {"eventId":"evt-001","vehicleId":"mock-vehicle-001","eventType":"START","source":"MOCK","occurredAt":"2026-11-11T01:00:00+09:00","lat":37.5509,"lng":127.1409,"socPercent":35,"odometerKm":20350.4}
@@ -424,7 +429,7 @@ Content-Type: application/json
 
 요구사항: `REQ_JD_002`, `REQ_VS_001`, `REQ_VS_004`. 프론트 수집 원본을 서버에 보관한다. 충전 권장값·다음 충전일은 생성하지 않는다.
 
-`POST /api/v1/vehicles/snapshots`
+`POST https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots`
 
 | JSON Body | JSON | Kotlin | 필수 | 예시 | 설명 |
 | --- | --- | --- | --- | --- | --- |
@@ -435,8 +440,8 @@ Content-Type: application/json
 | drivableRangeKm | integer/null | `Int?` | 아니오 | 235 / null | 주행가능거리(km), 0 이상. SDK 출처 미확정 |
 
 ```http
-POST /api/v1/vehicles/snapshots HTTP/1.1
-Host: localhost:8443
+POST https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots HTTP/1.1
+Host: 15-164-244-37.sslip.io
 Content-Type: application/json
 
 {"vehicleId":"mock-vehicle-001","recordedAt":"2026-11-11T01:30:00+09:00","socPercent":62,"odometerKm":20350.4,"drivableRangeKm":null}
@@ -472,7 +477,7 @@ vehicleId + recordedAt의 같은 순간을 고유 키로 사용한다. 같은 �
 
 요구사항: `REQ_JD_002`, `REQ_LG_002`, `REQ_CM_006`. 최대 최근 8주 원본 스냅샷을 반환한다. 평균 주행거리와 충전 권장 계산은 프론트 책임이다.
 
-`GET /api/v1/vehicles/snapshots`
+`GET https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots`
 
 | Query | JSON 의미 타입 | Kotlin | 필수 | 예시·기본값 | 설명 |
 | --- | --- | --- | --- | --- | --- |
@@ -481,8 +486,8 @@ vehicleId + recordedAt의 같은 순간을 고유 키로 사용한다. 같은 �
 | to | string(date) | `String?` | 아니오 | 기본 오늘 | YYYY-MM-DD, 시작일 이하 불가 |
 
 ```http
-GET /api/v1/vehicles/snapshots?vehicleId=mock-vehicle-001&from=2026-10-28&to=2026-11-11 HTTP/1.1
-Host: localhost:8443
+GET https://15-164-244-37.sslip.io/api/v1/vehicles/snapshots?vehicleId=mock-vehicle-001&from=2026-10-28&to=2026-11-11 HTTP/1.1
+Host: 15-164-244-37.sslip.io
 ```
 
 요청 범위를 현재 보관 창과 오늘까지로 제한한다. 날짜 범위 양끝을 포함하며 측정 시각 오름차순으로 반환한다. 동일 시각의 레코드는 차량별 고유하다. 차량별 조회를 분리하고, 미수집일을 0km로 채우지 않는다.
@@ -533,15 +538,15 @@ Host: localhost:8443
 
 요구사항: `REQ_VS_005`, `REQ_LG_002`. 마지막 COMPLETE와 최근 보관된 차량 스냅샷을 조회한다. 시연용 결과는 source=MOCK·trusted=false로 표시한다.
 
-`GET /api/v1/charging-events/latest`
+`GET https://15-164-244-37.sslip.io/api/v1/charging-events/latest`
 
 | Query | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
 | --- | --- | --- | --- | --- | --- |
 | vehicleId | string | `String` | 예 | mock-vehicle-001 | 차량 ID |
 
 ```http
-GET /api/v1/charging-events/latest?vehicleId=mock-vehicle-001 HTTP/1.1
-Host: localhost:8443
+GET https://15-164-244-37.sslip.io/api/v1/charging-events/latest?vehicleId=mock-vehicle-001 HTTP/1.1
+Host: 15-164-244-37.sslip.io
 ```
 
 ```json
@@ -577,7 +582,9 @@ COMPLETE가 없으면 스냅샷이 있어도 차량 ID 외의 nullable 항목은
 
 ## 환경공단 수집·캐시·Mock 정책
 
-[한국환경공단 OpenAPI](https://www.data.go.kr/data/15076352/openapi.do)의 getChargerInfo·getChargerStatus **XML**을 서버에서 안전하게 파싱해 PostgreSQL에 저장하고 앱에는 JSON으로 제공한다. 인증키는 서버 전용이며 응답·문서 예시·로그에 포함하지 않는다. 이름·주소는 원본 한국어를 유지한다. DTD·외부 엔터티를 비활성화하고 연결·읽기 시간 제한과 응답 크기 제한을 둔다.
+[한국환경공단 OpenAPI](https://www.data.go.kr/data/15076352/openapi.do)의 getChargerInfo·getChargerStatus에 `dataType=JSON`을 요청하고 Jackson으로 파싱하여 PostgreSQL에 저장한다. 앱에 반환하는 자체 JSON 계약은 그대로 유지한다. 2026-11-12 인증된 검증에서 두 오퍼레이션을 각각 1회 호출해 HTTP 200, `application/json;charset=UTF-8`, `resultCode=00`, 평평한 루트와 `items.item` 배열을 확인했다. 이 확인은 이번 코드가 운영에 배포되었다는 뜻은 아니다.
+
+외부 응답의 형식·오류·누락값은 수신 경계 한 곳에서 처리한다. JSON 요청에 XML·HTML 등 예상하지 않은 응답이 오면 정상 목록으로 취급하지 않고 수집 실패로 처리하여 기존 캐시를 유지한다. 연결·읽기 시간 제한, 응답 크기 제한, 지역·페이지·DB 배치 처리와 호출 예산을 사용한다. 인증키는 서버 전용이며 응답·문서 예시·로그에 포함하지 않는다. 이름·주소는 원본 한국어를 유지한다.
 
 기본 수집 범위는 **서울(zcode=11)**이다. DATA_GO_KR_ZCODES로 설정한 지역만 정기 갱신하며 전국 데이터가 있다고 가정하지 않는다. 메타데이터는 최초 수집 후 하루 1회, 상태는 5분 주기를 목표로 수집한다. 상태 조회는 `period=10`으로 구간을 겹쳐 일반적인 실행 지연의 누락을 줄이고 원천 시각이 이전인 변경분으로 현재 값을 되돌리지 않는다. 상태는 변경분 병합이며 누락 항목을 삭제하지 않는다. 전체 지역 메타데이터 스냅샷의 삭제·무효 항목은 유효 충전기 수에서 제외한다.
 
@@ -609,7 +616,7 @@ python scripts/lib/env.py validate --file .env --mode local
 | --- | --- | --- |
 | COMPOSE_PROJECT_NAME | altercharge | Compose 프로젝트·볼륨 이름 |
 | SPRING_PROFILES_ACTIVE | prod | 컨테이너 실행 프로필 |
-| APP_DOMAIN | needed / 로컬 localhost | 운영 실제 도메인, 프로토콜·포트 제외 |
+| APP_DOMAIN | 15-164-244-37.sslip.io / 로컬 localhost | 운영 호스트 이름만 입력. 프로토콜·포트 제외 |
 | APP_PORT | 8080 | 앱 내부 포트 |
 | HTTP_PORT / HTTPS_PORT | 80 / 443 | 운영 외부 포트. 로컬 초기화는 HTTPS 8443 |
 | AWS_REGION | ap-northeast-2 | EC2 준비 시 사용할 기본 리전 |
@@ -620,7 +627,7 @@ python scripts/lib/env.py validate --file .env --mode local
 | POSTGRES_PORT | 5432 | DB 내부 포트 |
 | DATA_GO_KR_BASE_URL | https://apis.data.go.kr/B552584/EvCharger | HTTPS 원본 API 주소 |
 | DATA_GO_KR_SERVICE_KEY | needed | 서버 전용 실제 키 입력 전 실행 불가 |
-| DATA_GO_KR_DATA_TYPE | XML | 원본 데이터 형식 |
+| DATA_GO_KR_DATA_TYPE | JSON | 환경공단 원본 요청 형식. 운영 .env는 사용자가 직접 변경 |
 | DATA_GO_KR_ZCODES | 11 | 수집 지역 쉼표 목록 |
 | DATA_GO_KR_STATUS_REFRESH_SECONDS | 300 | 상태 수집 간격, 최소 5분 |
 | DATA_GO_KR_INFO_REFRESH_SECONDS | 86400 | 메타데이터 수집 간격, 최소 하루 |
@@ -675,11 +682,13 @@ cd altercharger-server
 .\gradlew.bat bootJar --no-daemon -x test
 ```
 
-Linux/macOS에서는 ./gradlew를 사용한다. ci 프로필과 가짜 XML·시드로 실제 환경공단 호출·키·AWS 자격증명 없이 검증한다. CI는 main의 push·pull_request에서 테스트·JAR 패키징을 수행한다. HTTP 필드·범위 검증은 Bean Validation, 도메인 정책은 서비스, XML 검증은 수신 경계에서 처리한다. Swagger 실제 생성과 정확한 8개 업무 operation은 로컬 스모크에서 확인한다. 작업하는 Codex의 한국어 Conventional Commits 규칙은 [AGENTS.md](AGENTS.md)에 둔다.
+Linux/macOS에서는 ./gradlew를 사용한다. ci 프로필과 가짜 JSON·시드로 실제 환경공단 호출·키·AWS 자격증명 없이 검증한다. CI는 main의 push·pull_request에서 테스트·JAR 패키징을 수행한다. HTTP 필드·범위 검증은 Bean Validation, 도메인 정책은 서비스, 외부 JSON 검증은 수신 경계에서 처리한다. Swagger 실제 생성과 정확한 8개 업무 operation은 로컬 스모크에서 확인한다. 작업하는 Codex의 한국어 Conventional Commits 규칙은 [AGENTS.md](AGENTS.md)에 둔다.
 
 ## 배포 상태
 
-**CD 파일 준비 완료 / 실배포 미실행.** `YOUR_DOMAIN`은 자리표시자다. GitHub Variable `DEPLOY_ENABLED`가 없거나 `false`이면 배포 작업은 실행되지 않는다. AWS 리소스·DNS·GitHub Secrets는 이 저장소 작업에서 생성하거나 변경하지 않았다.
+**이번 변경의 push·실배포 미실행 / 공개 호스트 접속 미확인.** 공개 주소는 `https://15-164-244-37.sslip.io`다. 2026-11-12 검증 환경에서 health·Swagger UI·OpenAPI JSON의 읽기 요청이 연결 거부로 실패하여 현재 접속 상태를 확인하지 못했다. TLS·호스트 이름 검증을 끄지 않았으며, 기존 서비스의 배포 상태와 이번 수정의 배포 여부를 구분한다. AWS 리소스·운영 `.env`·GitHub Secrets는 이번 작업에서 생성하거나 변경하지 않았다.
+
+사용자가 먼저 EC2 `/opt/altercharge/.env`의 `DATA_GO_KR_DATA_TYPE=JSON`, `APP_DOMAIN=15-164-244-37.sslip.io`, `SPRING_PROFILES_ACTIVE=prod`와 기존 비밀값을 확인한다. 운영 `.env`는 사용자가 직접 수정하며 Codex와 CD는 수정·재생성·업로드하지 않는다. 준비 후 사용자가 `main`에 push하면 기존 CI 성공과 `DEPLOY_ENABLED=true` 조건에 따라 CD가 실행될 수 있다. 게이트가 없거나 `false`이면 실행되지 않는다. 운영 설정을 준비하기 전에 자동 배포를 트리거하지 않는다.
 
 구성은 EC2 1대의 Docker Compose(app + PostgreSQL + Caddy)다. Ubuntu LTS, SSH 사용자 `ubuntu`, `/opt/altercharge`, 리전 `ap-northeast-2`를 기본으로 한다. GitHub Actions가 Java 21 실행 JAR를 빌드해 SHA별 staging으로 전송하고 EC2는 `Dockerfile.runtime`으로 JAR 실행 이미지만 만든다. 소스를 서버에서 컴파일하지 않는다.
 
@@ -689,7 +698,7 @@ EC2를 준비하고 저장소의 `.env.example`, `scripts/`, `docker/postgres/10
 sudo bash scripts/bootstrap-ec2.sh
 ```
 
-부트스트랩은 Docker Engine·Compose·rsync·curl·Python을 준비하고 `/opt/altercharge/.env`의 신규 DB 비밀번호를 자동 생성한다. 기존 `.env`·비밀번호·DB 볼륨은 보존한다. 기존 DB 볼륨이 있는데 비밀번호가 없으면 자동 교체하지 않으므로 기존 값을 복구해야 한다. Docker 그룹 변경 후 `ubuntu`로 다시 로그인한다. 운영 파일에 `APP_DOMAIN`과 `DATA_GO_KR_SERVICE_KEY`의 실제 값을 채우고 검증한다. 로컬 `.env`를 서버로 복사하지 않는다.
+부트스트랩은 Docker Engine·Compose·rsync·curl·Python을 준비하고 새 EC2의 `/opt/altercharge/.env`에 신규 DB 비밀번호를 자동 생성한다. 기존 서버에서는 `.env`·비밀번호·DB 볼륨을 보존하며 이번 JSON 전환을 위해 부트스트랩을 다시 실행하지 않는다. 기존 DB 볼륨이 있는데 비밀번호가 없으면 자동 교체하지 않으므로 기존 값을 복구해야 한다. 최초 준비 때 Docker 그룹을 변경했다면 `ubuntu`로 다시 로그인한다. 운영 파일의 `APP_DOMAIN=15-164-244-37.sslip.io`, `DATA_GO_KR_DATA_TYPE=JSON`, 기존 `DATA_GO_KR_SERVICE_KEY`를 확인하고 검증한다. 로컬 `.env`를 서버로 복사하지 않는다.
 
 ```bash
 python3 /opt/altercharge/scripts/lib/env.py validate --file /opt/altercharge/.env --mode production
@@ -720,6 +729,22 @@ bash /opt/altercharge/staging/<40자리-SHA>/scripts/deploy-ec2.sh <40자리-SHA
 bash /opt/altercharge/scripts/deploy-ec2.sh
 ```
 
-배포는 `flock` 잠금, 이전 정상 JAR·설정 백업(최근 2개), Compose `up -d --build --wait`, 공인 HTTPS `/actuator/health` 순서로 진행한다. 환경변수는 `/opt/altercharge/.env`만 사용한다. 실패하면 이전 앱·프록시 설정을 복구하고 실패 코드로 종료한다. 첫 배포 실패에는 이전 정상본이 없어 앱·프록시만 중지한다. DB 스키마는 자동 롤백하지 않으므로 마이그레이션은 이전 앱과 호환되게 작성하고 별도로 DB를 백업한다. `altercharge_postgres_data`, `altercharge_caddy_data`, `altercharge_caddy_config` 볼륨은 유지한다.
+배포는 `flock` 잠금, 이전 정상 JAR·설정 백업(최근 2개), Compose `up -d --build --wait`, 공인 HTTPS `/actuator/health` 순서로 진행한다. 환경변수는 `/opt/altercharge/.env`만 사용한다. 실패하면 이전 앱·프록시 설정 복구를 시도하고 실패 코드로 종료한다. 첫 배포 실패에는 이전 정상본이 없어 앱·프록시만 중지한다. 첫 JSON 전환 후 이전 XML 전용 JAR로 복구하면 현재 운영 `.env`의 JSON 설정과 호환되지 않을 수 있으므로 운영자가 복구할 버전에 맞춰 형식을 수동 조정해야 한다. 스크립트는 `.env`를 자동 롤백하거나 덮어쓰지 않는다. DB 스키마도 자동 롤백하지 않으므로 마이그레이션은 이전 앱과 호환되게 작성하고 별도로 DB를 백업한다. `altercharge_postgres_data`, `altercharge_caddy_data`, `altercharge_caddy_config` 볼륨은 유지한다.
 
-배포 후 확인 주소는 `https://YOUR_DOMAIN/actuator/health`, `https://YOUR_DOMAIN/swagger-ui/index.html`, `https://YOUR_DOMAIN/v3/api-docs`다. 실제 도메인이 확정되고 배포를 확인하면 위 링크를 교체한다.
+배포 후 [health](https://15-164-244-37.sslip.io/actuator/health), [Swagger UI](https://15-164-244-37.sslip.io/swagger-ui/index.html), [OpenAPI JSON](https://15-164-244-37.sslip.io/v3/api-docs)을 실제로 확인한다.
+
+### 운영 메모리 확인
+
+EC2 t3.micro는 2 vCPU·메모리 1GiB다. 운영 Compose에만 앱 544MiB·PostgreSQL 192MiB·Caddy 64MiB 제한을 두고 JVM `-Xms64m -Xmx224m`, Metaspace 160MiB, Direct memory 32MiB, Code cache 64MiB, 스택 512KiB와 Serial GC·OOM 즉시 종료를 적용한다. 운영 Hikari 연결 풀은 최대 3·최소 유휴 0이다. PostgreSQL은 shared_buffers 32MB·work_mem 1MB·maintenance_work_mem 16MB·max_connections 20을 사용한다. 로컬 Compose와 CI에는 이 자원 제한을 적용하지 않는다.
+
+이는 메모리 사용량을 낮추기 위한 초기값이며 **t3.micro 운영에서 장시간 수집·동시 요청·OOM 안정성은 아직 실측하지 않았다**. 사용자가 배포 후 EC2에서 아래 명령으로 메모리와 재시작 여부를 확인한다. 로그나 상태를 공유할 때 운영 비밀값은 포함하지 않는다.
+
+```bash
+docker stats --no-stream
+free -h
+docker compose --env-file /opt/altercharge/.env -f /opt/altercharge/current/compose.prod.yaml ps
+docker compose --env-file /opt/altercharge/.env -f /opt/altercharge/current/compose.prod.yaml logs --tail=80 app
+curl --fail --silent --show-error https://15-164-244-37.sslip.io/actuator/health
+```
+
+OOM이 발생하면 JSON 페이지·DB 배치·중복 적재와 연결 풀을 먼저 점검한다. swap 추가나 인스턴스 변경은 사용자가 별도로 판단하며 이번 작업에서는 원격 자원·swap을 변경하지 않는다.

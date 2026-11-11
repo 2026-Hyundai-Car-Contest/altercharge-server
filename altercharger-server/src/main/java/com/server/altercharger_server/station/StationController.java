@@ -31,7 +31,7 @@ public class StationController {
     }
 
     @GetMapping
-    @Operation(summary = "01. 주변 충전소 목록·검색", description = "REQ_ST_001, REQ_SL_001/002/004/005, REQ_VS_006, REQ_CM_006. 설정 지역의 환경공단 XML 수집 캐시를 서버 JSON으로 조회합니다. 반경 필터 → 거리·statId 정렬 → 페이지 순으로 처리합니다. 가용 수는 stat=2만 포함합니다. 원본 한국어 이름·주소를 유지하며, 방문 수는 mock-user-001의 검증된 REAL 기록만 반영하고 미확인은 null입니다. MOCK 이벤트는 집계하지 않습니다. 요금은 제외합니다. 오래된 캐시도 최종 관측 시각과 반환하며 fetchedAt은 조회 시각입니다. 예시는 모두 가상 데이터입니다.")
+    @Operation(summary = "01. 주변 충전소 목록·검색", description = "REQ_ST_001, REQ_SL_001/002/004/005, REQ_VS_006, REQ_CM_006. 설정 지역의 환경공단 JSON 수집 캐시를 서버 JSON으로 조회합니다. 반경 필터 → 거리·statId 정렬 → 페이지 순으로 처리합니다. 가용 수는 stat=2만 포함합니다. 원본 한국어 이름·주소를 유지하며, 방문 수는 mock-user-001의 검증된 REAL 기록만 반영하고 미확인은 null입니다. MOCK 이벤트는 집계하지 않습니다. 요금은 제외합니다. 오래된 캐시도 최종 관측 시각과 반환하며 fetchedAt은 조회 시각입니다. 예시는 모두 가상 데이터입니다.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "조회 성공. 반경 내 0건도 정상 빈 items", content = @Content(mediaType = "application/json", schema = @Schema(implementation = StationPage.class), examples = {@ExampleObject(name = "목록", value = StationApiExamples.PAGE), @ExampleObject(name = "반경 내 없음", value = StationApiExamples.EMPTY_PAGE)})),
             @ApiResponse(responseCode = "400", description = "필수 좌표 누락·유한수 범위·반경·페이지 오류", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = StationApiExamples.BAD_REQUEST))),
@@ -49,7 +49,7 @@ public class StationController {
     }
 
     @GetMapping("/{stationId}")
-    @Operation(summary = "02. 충전소 상세·충전기 상태", description = "REQ_ST_007, REQ_SL_001. 환경공단 XML의 충전기별 원본 코드·변경 시각과 서버 관측 시각을 JSON으로 제공합니다. 삭제·무효 항목은 제외하며 stat=2만 가용 수로 집계합니다. 복합 규격은 connectorTypes에 모두 보존합니다. 출력 미제공은 null이며 충전 요금은 1차 범위에서 제외합니다. 원본 한국어를 유지하고 GET에서 외부 호출을 하지 않습니다. 캐시가 오래된 경우 길 안내 확인 API에서 안내 허용 여부를 재검사해야 합니다. 예시 ID는 가상입니다.")
+    @Operation(summary = "02. 충전소 상세·충전기 상태", description = "REQ_ST_007, REQ_SL_001. 환경공단 JSON의 충전기별 원본 코드·변경 시각과 서버 관측 시각을 JSON으로 제공합니다. 삭제·무효 항목은 제외하며 stat=2만 가용 수로 집계합니다. 복합 규격은 connectorTypes에 모두 보존합니다. 출력 미제공은 null이며 충전 요금은 1차 범위에서 제외합니다. 원본 한국어를 유지하고 GET에서 외부 호출을 하지 않습니다. 캐시가 오래된 경우 길 안내 확인 API에서 안내 허용 여부를 재검사해야 합니다. 예시 ID는 가상입니다.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "충전소 및 유효 충전기 조회 성공", content = @Content(mediaType = "application/json", schema = @Schema(implementation = StationDetail.class), examples = @ExampleObject(value = StationApiExamples.DETAIL))),
             @ApiResponse(responseCode = "404", description = "수집 완료 후 존재하지 않는 충전소", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = StationApiExamples.NOT_FOUND))),
