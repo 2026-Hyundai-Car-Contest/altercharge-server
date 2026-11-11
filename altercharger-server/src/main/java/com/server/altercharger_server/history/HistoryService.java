@@ -1,6 +1,5 @@
 package com.server.altercharger_server.history;
 
-import com.server.altercharger_server.common.Geo;
 import com.server.altercharger_server.common.error.ApiException;
 import com.server.altercharger_server.history.HistoryDtos.*;
 import com.server.altercharger_server.history.entity.ChargingEvent;
@@ -41,11 +40,6 @@ public class HistoryService {
     @Transactional
     public Stored<EventAccepted> saveEvent(EventRequest request) {
         if (request.source() == Source.REAL) throw HistoryPolicy.invalidBody("현재 외부 충전 이벤트는 MOCK만 허용합니다. REAL은 검증 경로가 필요합니다.");
-        if (request.eventType() == null || request.lat() == null || request.lng() == null
-                || !Geo.validCoordinates(request.lat(), request.lng())) {
-            throw HistoryPolicy.invalidBody("이벤트 종류와 유효한 위경도가 필요합니다.");
-        }
-        policy.validateNumbers(request.socPercent(), request.odometerKm(), false);
         OffsetDateTime occurredAt = policy.normalize(request.occurredAt());
         lockVehicle(request.vehicleId());
         var previous = events.findById(request.eventId());
@@ -66,8 +60,6 @@ public class HistoryService {
 
     @Transactional
     public Stored<SnapshotSaved> saveSnapshot(SnapshotRequest request) {
-        policy.validateNumbers(request.socPercent(), request.odometerKm(), true);
-        if (request.drivableRangeKm() != null && request.drivableRangeKm() < 0) throw HistoryPolicy.invalidBody("주행 가능 거리는 0 이상 또는 null이어야 합니다.");
         OffsetDateTime recordedAt = policy.normalize(request.recordedAt());
         lockVehicle(request.vehicleId());
         var previous = snapshots.findByVehicleIdAndRecordedAt(request.vehicleId(), recordedAt);
@@ -130,7 +122,6 @@ public class HistoryService {
     }
 
     private void requireVehicle(String vehicleId) {
-        if (vehicleId == null || vehicleId.isBlank()) throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "vehicleId가 필요합니다.");
         if (!vehicles.existsById(vehicleId)) throw vehicleNotFound();
     }
 

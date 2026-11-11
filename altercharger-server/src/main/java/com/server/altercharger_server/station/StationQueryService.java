@@ -26,9 +26,6 @@ public class StationQueryService {
     private final VisitService visits;
 
     public StationPage list(double lat, double lng, double radiusKm, String keyword, int page, int size) {
-        if (!Double.isFinite(radiusKm) || radiusKm <= 0 || radiusKm > 3 || page < 0 || size < 1 || size > 200) {
-            throw invalidParameters();
-        }
         List<NearbyStation> nearby = nearby(lat, lng, radiusKm, keyword);
         Map<String, Integer> visitCounts = visits.realVisitCounts(DEMO_USER_ID);
         long offset = (long) page * size;
@@ -58,7 +55,6 @@ public class StationQueryService {
     }
 
     List<NearbyStation> nearby(double lat, double lng, double radiusKm, String keyword) {
-        if (!Geo.validCoordinates(lat, lng)) throw invalidParameters();
         requireCollectedData();
         String search = keyword == null ? "" : keyword.strip().toLowerCase(Locale.ROOT);
         return store.findAll().stream()
@@ -83,10 +79,6 @@ public class StationQueryService {
         if (!store.hasCollectedData()) {
             throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "STATION_DATA_UNAVAILABLE", "아직 수집된 충전소 데이터가 없습니다. 잠시 후 다시 시도해 주세요.");
         }
-    }
-
-    private ApiException invalidParameters() {
-        return new ApiException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", "좌표, 반경(0 초과 3km 이하), 페이지(0 이상), 크기(1~200)를 확인해 주세요.");
     }
 
     private boolean contains(String value, String search) {

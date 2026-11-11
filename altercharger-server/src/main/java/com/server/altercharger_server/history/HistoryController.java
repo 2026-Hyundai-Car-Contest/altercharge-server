@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import java.time.LocalDate;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -102,7 +103,7 @@ public class HistoryController {
             @ApiResponse(responseCode = "500", description = "예상하지 못한 서버 오류", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = INTERNAL_ERROR)))
     })
     public SnapshotHistory snapshots(
-            @Parameter(description = "필수 시드 차량 ID", required = true, example = "mock-vehicle-001") @RequestParam String vehicleId,
+            @Parameter(description = "필수 시드 차량 ID", required = true, example = "mock-vehicle-001") @RequestParam @NotBlank String vehicleId,
             @Parameter(description = "시작일(포함), YYYY-MM-DD. 생략 시 한국시간 오늘-55일(기본 설정)", example = "2026-10-28", schema = @Schema(type = "string", format = "date")) @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @Parameter(description = "종료일(포함), YYYY-MM-DD. 생략 시 한국시간 오늘", example = "2026-11-11", schema = @Schema(type = "string", format = "date")) @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         return history.snapshots(vehicleId, from, to);
@@ -125,7 +126,7 @@ public class HistoryController {
             @ApiResponse(responseCode = "503", description = "PostgreSQL 연결 불가", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = DB_UNAVAILABLE))),
             @ApiResponse(responseCode = "500", description = "예상하지 못한 서버 오류", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = INTERNAL_ERROR)))
     })
-    public LatestCharge latestCharge(@Parameter(description = "필수 시드 차량 ID", required = true, example = "mock-vehicle-001") @RequestParam String vehicleId) {
+    public LatestCharge latestCharge(@Parameter(description = "필수 시드 차량 ID", required = true, example = "mock-vehicle-001") @RequestParam @NotBlank String vehicleId) {
         return history.latestCharge(vehicleId);
     }
 }

@@ -1,5 +1,6 @@
 package com.server.altercharger_server.history;
 
+import com.server.altercharger_server.common.validation.FiniteNumber;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Max;
@@ -27,10 +28,10 @@ public final class HistoryDtos {
             @NotNull @Schema(description = "충전 시작 또는 완료", example = "START", requiredMode = Schema.RequiredMode.REQUIRED) EventType eventType,
             @Schema(description = "생략/null이면 MOCK. REAL은 현재 거부합니다.", defaultValue = "MOCK", example = "MOCK", nullable = true) Source source,
             @NotNull @Schema(description = "ISO 8601 오프셋 시각. UTC 마이크로초로 절삭 저장하며 최근 56일의 한국시간 날짜와 현재+5분까지 허용(설정 가능).", example = "2026-11-11T01:00:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED) OffsetDateTime occurredAt,
-            @NotNull @Schema(description = "유한한 위도, 도", minimum = "-90", maximum = "90", example = "37.5501", requiredMode = Schema.RequiredMode.REQUIRED) Double lat,
-            @NotNull @Schema(description = "유한한 경도, 도", minimum = "-180", maximum = "180", example = "127.1401", requiredMode = Schema.RequiredMode.REQUIRED) Double lng,
+            @NotNull @FiniteNumber(min = -90, max = 90) @Schema(description = "유한한 위도, 도", minimum = "-90", maximum = "90", example = "37.5501", requiredMode = Schema.RequiredMode.REQUIRED) Double lat,
+            @NotNull @FiniteNumber(min = -180, max = 180) @Schema(description = "유한한 경도, 도", minimum = "-180", maximum = "180", example = "127.1401", requiredMode = Schema.RequiredMode.REQUIRED) Double lng,
             @NotNull @Min(0) @Max(100) @Schema(description = "배터리 SOC, %", minimum = "0", maximum = "100", example = "35", requiredMode = Schema.RequiredMode.REQUIRED) Integer socPercent,
-            @PositiveOrZero @Schema(description = "이벤트 당시 유한한 누적 주행거리, km. 출처에 없으면 null", minimum = "0", example = "20350.4", nullable = true) Double odometerKm) {}
+            @FiniteNumber(min = 0) @Schema(description = "이벤트 당시 유한한 누적 주행거리, km. 출처에 없으면 null", minimum = "0", example = "20350.4", nullable = true) Double odometerKm) {}
 
     @Schema(name = "ChargingEventAccepted")
     public record EventAccepted(
@@ -45,7 +46,7 @@ public final class HistoryDtos {
             @NotBlank @Size(max = 100) @Schema(description = "시드 차량 식별자", example = "mock-vehicle-001", requiredMode = Schema.RequiredMode.REQUIRED) String vehicleId,
             @NotNull @Schema(description = "오프셋이 포함된 측정 시각. UTC 마이크로초로 절삭 저장. 최근 56일 한국시간 날짜 및 현재+5분까지 허용(설정 가능)", example = "2026-11-11T01:30:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED) OffsetDateTime recordedAt,
             @NotNull @Min(0) @Max(100) @Schema(description = "배터리 SOC, %", minimum = "0", maximum = "100", example = "62", requiredMode = Schema.RequiredMode.REQUIRED) Integer socPercent,
-            @NotNull @PositiveOrZero @Schema(description = "유한한 누적 주행거리, km", minimum = "0", example = "20350.4", requiredMode = Schema.RequiredMode.REQUIRED) Double odometerKm,
+            @NotNull @FiniteNumber(min = 0) @Schema(description = "유한한 누적 주행거리, km", minimum = "0", example = "20350.4", requiredMode = Schema.RequiredMode.REQUIRED) Double odometerKm,
             @PositiveOrZero @Schema(description = "주행 가능 거리, km. SDK 출처가 확정되지 않은 선택 값", minimum = "0", example = "235", nullable = true) Integer drivableRangeKm) {}
 
     @Schema(name = "VehicleSnapshotSaved")

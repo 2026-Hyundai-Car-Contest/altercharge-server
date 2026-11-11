@@ -2,6 +2,7 @@ package com.server.altercharger_server.station;
 
 import com.server.altercharger_server.common.error.ApiErrorAdvice;
 import com.server.altercharger_server.history.VisitService;
+import java.time.Clock;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,7 +24,10 @@ class StationControllerTests {
     @BeforeEach
     void setUp() {
         store = mock(StationStore.class);
-        mvc = MockMvcBuilders.standaloneSetup(new StationController(new StationQueryService(store, mock(VisitService.class))))
+        var visits = mock(VisitService.class);
+        var query = new StationQueryService(store, visits);
+        mvc = MockMvcBuilders.standaloneSetup(new StationController(query),
+                        new StationDecisionController(new StationDecisionService(query, visits, Clock.systemUTC(), 15)))
                 .setControllerAdvice(new ApiErrorAdvice()).build();
     }
 
@@ -42,6 +46,9 @@ class StationControllerTests {
     @Test
     void missingCoordinateReturns400() throws Exception {
         mvc.perform(get("/api/v1/stations").param("lng", "127"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST"));
+        mvc.perform(get("/api/v1/stations/recommendation").param("lat", "Infinity")
+                        .param("lng", "127").param("chargeRecommended", "true"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST"));
     }
 

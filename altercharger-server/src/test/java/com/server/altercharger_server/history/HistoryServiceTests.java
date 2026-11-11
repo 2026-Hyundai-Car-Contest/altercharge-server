@@ -98,7 +98,6 @@ class HistoryServiceTests {
         assertError(409, "SNAPSHOT_CONFLICT", () -> history.saveSnapshot(snapshot("2026-11-10T16:30:00.987654Z", 101, null)));
         assertError(400, "INVALID_REQUEST_BODY", () -> history.saveSnapshot(snapshot("2026-11-11T23:05:01+09:00", 100, null)));
         assertError(400, "INVALID_REQUEST_BODY", () -> history.saveSnapshot(snapshot("2026-09-16T23:59:59+09:00", 100, null)));
-        assertError(400, "INVALID_REQUEST_BODY", () -> history.saveSnapshot(snapshot("2026-11-11T01:30:00+09:00", Double.NaN, null)));
         assertError(404, "VEHICLE_NOT_FOUND", () -> history.saveSnapshot(new SnapshotRequest("unknown", OffsetDateTime.parse("2026-11-11T01:30:00+09:00"), 62, 100.0, null)));
     }
 

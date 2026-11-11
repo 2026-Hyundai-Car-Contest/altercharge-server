@@ -30,6 +30,14 @@ class HistoryControllerTests {
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST_BODY"));
         mvc.perform(post("/api/v1/charging-events").contentType(MediaType.APPLICATION_JSON).content("{\"eventType\":\"END\"}"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST_BODY"));
+        mvc.perform(post("/api/v1/charging-events").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"eventId\":\"invalid-coordinate\",\"vehicleId\":\"mock-vehicle-001\",\"eventType\":\"START\",\"occurredAt\":\"2026-11-11T01:00:00+09:00\",\"lat\":\"NaN\",\"lng\":127,\"socPercent\":35}"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST_BODY"));
+        mvc.perform(post("/api/v1/vehicles/snapshots").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"vehicleId\":\"mock-vehicle-001\",\"recordedAt\":\"2026-11-11T01:00:00+09:00\",\"socPercent\":50,\"odometerKm\":\"Infinity\"}"))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST_BODY"));
+        mvc.perform(get("/api/v1/charging-events/latest").param("vehicleId", " "))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.error").value("INVALID_REQUEST"));
         when(history.latestCharge("unknown")).thenThrow(new ApiException(HttpStatus.NOT_FOUND, "VEHICLE_NOT_FOUND", "해당 차량을 찾을 수 없습니다."));
         mvc.perform(get("/api/v1/charging-events/latest").param("vehicleId", "unknown"))
                 .andExpect(status().isNotFound()).andExpect(jsonPath("$.error").value("VEHICLE_NOT_FOUND"));
