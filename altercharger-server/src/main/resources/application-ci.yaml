@@ -1,0 +1,4 @@
+app:
+  collector:
+    enabled: false
+    service-key: ""

@@ -1,3 +1,46 @@
 spring:
   application:
     name: altercharger-server
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/altercharge}
+    username: ${SPRING_DATASOURCE_USERNAME:altercharge}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    hikari:
+      maximum-pool-size: 5
+      connection-timeout: 10000
+  sql:
+    init:
+      mode: always
+
+server:
+  forward-headers-strategy: framework
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+app:
+  collector:
+    enabled: ${DATA_GO_KR_ENABLED:true}
+    service-key: ${DATA_GO_KR_SERVICE_KEY:}
+    zcodes: ${DATA_GO_KR_ZCODES:11}
+    rows: ${DATA_GO_KR_NUM_OF_ROWS:9999}
+    daily-budget: ${DATA_GO_KR_DAILY_BUDGET:900}
+    metadata-budget: ${DATA_GO_KR_METADATA_BUDGET:100}
+
+springdoc:
+  paths-to-match: /api/v1/stations/**, /api/v1/stations
+
+logging:
+  level:
+    # HTTP 클라이언트의 요청 URL에는 인증키가 포함된다.
+    jdk.httpclient.HttpClient: "OFF"

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+    <header><resultCode>00</resultCode><resultMsg>OK</resultMsg></header>
+    <body>
+        <items>
+            <item>
+                <statId>ST-001</statId><statNm>예시 충전소</statNm><addr>서울특별시 예시 주소</addr>
+                <lat>37.551</lat><lng>127.141</lng><chgerId>01</chgerId><chgerType>06</chgerType>
+                <output>100.5</output><stat>2</stat><statUpdDt>20261111200000</statUpdDt><delYn>N</delYn>
+            </item>
+            <item>
+                <statId>ST-001</statId><statNm>예시 충전소</statNm><addr>서울특별시 예시 주소</addr>
+                <lat>37.551</lat><lng>127.141</lng><chgerId>02</chgerId><chgerType>02</chgerType>
+                <output/><stat>5</stat><statUpdDt>20261111195900</statUpdDt><delYn>Y</delYn>
+            </item>
+        </items>
+        <totalCount>2</totalCount><pageNo>1</pageNo><numOfRows>9999</numOfRows>
+    </body>
+</response>
