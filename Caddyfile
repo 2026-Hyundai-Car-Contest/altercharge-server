@@ -3,7 +3,7 @@
 	admin off
 }
 
-https://localhost {
+https://{$APP_DOMAIN} {
 	tls internal
-	reverse_proxy app:8080
+	reverse_proxy app:{$APP_PORT}
 }

@@ -15,7 +15,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,19 +41,26 @@ public class StationCollector {
     private final int rows;
     private final int dailyBudget;
     private final int metadataBudget;
-    private boolean missingKeyReported;
+    private final Duration statusRefresh;
+    private final Duration infoRefresh;
 
     public StationCollector(DataSource dataSource, CollectorLedger ledger, StationStore store, EvChargerClient client,
-                            @Value("${app.collector.service-key:${DATA_GO_KR_SERVICE_KEY:}}") String serviceKey,
-                            @Value("${app.collector.zcodes:${DATA_GO_KR_ZCODES:11}}") String zcodes,
-                            @Value("${app.collector.rows:9999}") int rows,
-                            @Value("${app.collector.daily-budget:900}") int dailyBudget,
-                            @Value("${app.collector.metadata-budget:100}") int metadataBudget) {
+                            @Value("${app.collector.service-key}") String serviceKey,
+                            @Value("${app.collector.zcodes}") String zcodes,
+                            @Value("${app.collector.rows}") int rows,
+                            @Value("${app.collector.daily-budget}") int dailyBudget,
+                            @Value("${app.collector.metadata-budget}") int metadataBudget,
+                            @Value("${app.collector.status-refresh-seconds}") long statusRefreshSeconds,
+                            @Value("${app.collector.info-refresh-seconds}") long infoRefreshSeconds) {
         this.dataSource = dataSource;
         this.ledger = ledger;
         this.store = store;
         this.client = client;
         this.serviceKey = serviceKey.strip();
+        if (this.serviceKey.isBlank() || Set.of("needed", "your_service_key_here", "your_service_key", "change_me", "changeme")
+                .contains(this.serviceKey.toLowerCase(Locale.ROOT))) {
+            throw new IllegalArgumentException("An actual service key is required when the collector is enabled");
+        }
         this.zcodes = Arrays.stream(zcodes.split(",")).map(String::strip).filter(value -> !value.isBlank()).distinct().toList();
         if (this.zcodes.isEmpty() || this.zcodes.stream().anyMatch(code -> !code.matches("[0-9]{2}"))) {
             throw new IllegalArgumentException("Collector zcodes must be comma-separated two-digit regional codes");
@@ -63,24 +72,22 @@ public class StationCollector {
         this.rows = rows;
         this.dailyBudget = dailyBudget;
         this.metadataBudget = metadataBudget;
+        if (statusRefreshSeconds < 300 || infoRefreshSeconds < 86400) {
+            throw new IllegalArgumentException("Collector status/info refresh must be at least 300/86400 seconds");
+        }
+        this.statusRefresh = Duration.ofSeconds(statusRefreshSeconds);
+        this.infoRefresh = Duration.ofSeconds(infoRefreshSeconds);
     }
 
     @Scheduled(initialDelay = 1000, fixedDelay = 60000)
     public void collectIfDue() {
-        if (serviceKey.isBlank()) {
-            if (!missingKeyReported) {
-                log.info("Collector disabled until DATA_GO_KR_SERVICE_KEY is configured; serving the existing cache");
-                missingKeyReported = true;
-            }
-            return;
-        }
         // Session advisory locks MUST be acquired and released on the same physical connection.
         // This dedicated connection is not a long-running transaction; quota reservations commit separately.
         try (Connection lockConnection = dataSource.getConnection()) {
             if (!lock(lockConnection, true)) return;
             try {
-                runIfDue("metadata", Duration.ofDays(1));
-                runIfDue("status", Duration.ofMinutes(5));
+                runIfDue("metadata", infoRefresh);
+                runIfDue("status", statusRefresh);
             } finally {
                 try {
                     lock(lockConnection, false);

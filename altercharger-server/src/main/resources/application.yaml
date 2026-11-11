@@ -2,9 +2,9 @@ spring:
   application:
     name: altercharger-server
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/altercharge}
-    username: ${SPRING_DATASOURCE_USERNAME:altercharge}
-    password: ${SPRING_DATASOURCE_PASSWORD:}
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     hikari:
       maximum-pool-size: 5
       connection-timeout: 10000
@@ -14,7 +14,7 @@ spring:
   jpa:
     open-in-view: false
     hibernate:
-      ddl-auto: validate
+      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO}
     properties:
       hibernate:
         jdbc:
@@ -23,11 +23,12 @@ spring:
         order_updates: true
   flyway:
     enabled: true
-    baseline-on-migrate: ${FLYWAY_ADOPT_LEGACY_SCHEMA:false}
+    baseline-on-migrate: ${FLYWAY_ADOPT_LEGACY_SCHEMA}
     baseline-version: "0"
     clean-disabled: true
 
 server:
+  port: ${APP_PORT}
   forward-headers-strategy: framework
   error:
     include-message: never
@@ -45,17 +46,21 @@ management:
 
 app:
   stations:
-    status-max-age-minutes: ${STATION_STATUS_MAX_AGE_MINUTES:15}
+    status-max-age-minutes: ${STATION_STATUS_MAX_AGE_MINUTES}
   history:
-    retention-days: ${HISTORY_RETENTION_DAYS:56}
-    max-future-minutes: ${HISTORY_MAX_FUTURE_MINUTES:5}
+    retention-days: ${HISTORY_RETENTION_DAYS}
+    max-future-minutes: ${HISTORY_MAX_FUTURE_MINUTES}
   collector:
-    enabled: ${DATA_GO_KR_ENABLED:true}
-    service-key: ${DATA_GO_KR_SERVICE_KEY:}
-    zcodes: ${DATA_GO_KR_ZCODES:11}
-    rows: ${DATA_GO_KR_NUM_OF_ROWS:9999}
-    daily-budget: ${DATA_GO_KR_DAILY_BUDGET:900}
-    metadata-budget: ${DATA_GO_KR_METADATA_BUDGET:100}
+    enabled: ${DATA_GO_KR_ENABLED}
+    service-key: ${DATA_GO_KR_SERVICE_KEY}
+    base-url: ${DATA_GO_KR_BASE_URL}
+    data-type: ${DATA_GO_KR_DATA_TYPE}
+    status-refresh-seconds: ${DATA_GO_KR_STATUS_REFRESH_SECONDS}
+    info-refresh-seconds: ${DATA_GO_KR_INFO_REFRESH_SECONDS}
+    zcodes: ${DATA_GO_KR_ZCODES}
+    rows: ${DATA_GO_KR_NUM_OF_ROWS}
+    daily-budget: ${DATA_GO_KR_DAILY_BUDGET}
+    metadata-budget: ${DATA_GO_KR_METADATA_BUDGET}
 
 springdoc:
   paths-to-match: /api/v1/**

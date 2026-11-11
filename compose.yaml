@@ -1,20 +1,22 @@
-name: altercharge
+name: ${COMPOSE_PROJECT_NAME:?Set COMPOSE_PROJECT_NAME in .env}
 
 services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    command: ["postgres", "-p", "${POSTGRES_PORT:?Set POSTGRES_PORT in .env}"]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env}
       POSTGRES_APP_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       POSTGRES_APP_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PORT: ${POSTGRES_PORT:?Set POSTGRES_PORT in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/10-create-app-user.sh:/docker-entrypoint-initdb.d/10-create-app-user.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d \"$$POSTGRES_DB\""]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p \"$$POSTGRES_PORT\" -U postgres -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -29,21 +31,28 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:?Set SPRING_PROFILES_ACTIVE in .env}
+      APP_PORT: ${APP_PORT:?Set APP_PORT in .env}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:${POSTGRES_PORT:?Set POSTGRES_PORT in .env}/${POSTGRES_DB:?Set POSTGRES_DB in .env}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      DATA_GO_KR_SERVICE_KEY: ${DATA_GO_KR_SERVICE_KEY:-}
-      DATA_GO_KR_ZCODES: ${DATA_GO_KR_ZCODES:-11}
-      DATA_GO_KR_ENABLED: ${DATA_GO_KR_ENABLED:-true}
-      DATA_GO_KR_NUM_OF_ROWS: ${DATA_GO_KR_NUM_OF_ROWS:-9999}
-      DATA_GO_KR_DAILY_BUDGET: ${DATA_GO_KR_DAILY_BUDGET:-900}
-      DATA_GO_KR_METADATA_BUDGET: ${DATA_GO_KR_METADATA_BUDGET:-100}
-      FLYWAY_ADOPT_LEGACY_SCHEMA: ${FLYWAY_ADOPT_LEGACY_SCHEMA:-false}
-      STATION_STATUS_MAX_AGE_MINUTES: ${STATION_STATUS_MAX_AGE_MINUTES:-15}
-      HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:-56}
-      HISTORY_MAX_FUTURE_MINUTES: ${HISTORY_MAX_FUTURE_MINUTES:-5}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: ${SPRING_JPA_HIBERNATE_DDL_AUTO:?Set SPRING_JPA_HIBERNATE_DDL_AUTO in .env}
+      DATA_GO_KR_BASE_URL: ${DATA_GO_KR_BASE_URL:?Set DATA_GO_KR_BASE_URL in .env}
+      DATA_GO_KR_SERVICE_KEY: ${DATA_GO_KR_SERVICE_KEY:?Set DATA_GO_KR_SERVICE_KEY in .env}
+      DATA_GO_KR_DATA_TYPE: ${DATA_GO_KR_DATA_TYPE:?Set DATA_GO_KR_DATA_TYPE in .env}
+      DATA_GO_KR_ZCODES: ${DATA_GO_KR_ZCODES:?Set DATA_GO_KR_ZCODES in .env}
+      DATA_GO_KR_STATUS_REFRESH_SECONDS: ${DATA_GO_KR_STATUS_REFRESH_SECONDS:?Set DATA_GO_KR_STATUS_REFRESH_SECONDS in .env}
+      DATA_GO_KR_INFO_REFRESH_SECONDS: ${DATA_GO_KR_INFO_REFRESH_SECONDS:?Set DATA_GO_KR_INFO_REFRESH_SECONDS in .env}
+      DATA_GO_KR_ENABLED: ${DATA_GO_KR_ENABLED:?Set DATA_GO_KR_ENABLED in .env}
+      DATA_GO_KR_NUM_OF_ROWS: ${DATA_GO_KR_NUM_OF_ROWS:?Set DATA_GO_KR_NUM_OF_ROWS in .env}
+      DATA_GO_KR_DAILY_BUDGET: ${DATA_GO_KR_DAILY_BUDGET:?Set DATA_GO_KR_DAILY_BUDGET in .env}
+      DATA_GO_KR_METADATA_BUDGET: ${DATA_GO_KR_METADATA_BUDGET:?Set DATA_GO_KR_METADATA_BUDGET in .env}
+      FLYWAY_ADOPT_LEGACY_SCHEMA: ${FLYWAY_ADOPT_LEGACY_SCHEMA:?Set FLYWAY_ADOPT_LEGACY_SCHEMA in .env}
+      STATION_STATUS_MAX_AGE_MINUTES: ${STATION_STATUS_MAX_AGE_MINUTES:?Set STATION_STATUS_MAX_AGE_MINUTES in .env}
+      HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:?Set HISTORY_RETENTION_DAYS in .env}
+      HISTORY_MAX_FUTURE_MINUTES: ${HISTORY_MAX_FUTURE_MINUTES:?Set HISTORY_MAX_FUTURE_MINUTES in .env}
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://localhost:8080/actuator/health"]
+      test: ["CMD-SHELL", "curl --fail --silent --output /dev/null \"http://localhost:$$APP_PORT/actuator/health\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -55,8 +64,11 @@ services:
     depends_on:
       app:
         condition: service_healthy
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      APP_PORT: ${APP_PORT:?Set APP_PORT in .env}
     ports:
-      - "127.0.0.1:${HTTPS_PORT:-8443}:443"
+      - "127.0.0.1:${HTTPS_PORT:?Set HTTPS_PORT in .env}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

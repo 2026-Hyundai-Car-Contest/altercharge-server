@@ -22,7 +22,7 @@ public class StationDecisionService {
     private final Duration statusMaxAge;
 
     public StationDecisionService(StationQueryService stations, VisitService visits, Clock clock,
-                                  @Value("${app.stations.status-max-age-minutes:15}") int statusMaxAgeMinutes) {
+                                  @Value("${app.stations.status-max-age-minutes}") int statusMaxAgeMinutes) {
         if (statusMaxAgeMinutes < 1 || statusMaxAgeMinutes > 1440) throw new IllegalArgumentException("Status validity must be 1..1440 minutes");
         this.stations = stations;
         this.visits = visits;

@@ -88,6 +88,10 @@
 *.pid
 *.pid.lock
 
+# Python dotenv helper cache
+__pycache__/
+*.py[cod]
+
 # Logs
 *.log
 logs/
@@ -110,6 +114,10 @@ logs/
 *.asc
 credentials.json
 secrets.json
+id_rsa
+id_ed25519
+*.ppk
+known_hosts.deploy
 
 
 # ==========================================

@@ -6,15 +6,33 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
 public class EvChargerClient {
     private static final int MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
     private final EvChargerXmlParser parser;
+    private final URI baseUri;
+    private final String dataType;
 
-    public EvChargerClient(EvChargerXmlParser parser) {
+    public EvChargerClient(EvChargerXmlParser parser, @Value("${app.collector.base-url}") String baseUrl,
+                           @Value("${app.collector.data-type}") String dataType) {
         this.parser = parser;
+        try {
+            URI parsed = URI.create(baseUrl.strip());
+            if (!"https".equalsIgnoreCase(parsed.getScheme()) || parsed.getHost() == null
+                    || parsed.getUserInfo() != null || parsed.getQuery() != null || parsed.getFragment() != null) {
+                throw new IllegalArgumentException();
+            }
+            this.baseUri = URI.create(parsed.toString().replaceAll("/+$", "") + "/");
+        } catch (IllegalArgumentException ex) {
+            // A malformed URL can include credentials; do not retain its parser exception.
+            throw new IllegalArgumentException("Collector base URL must be HTTPS without credentials, query, or fragment");
+        }
+        this.dataType = dataType.strip().toUpperCase(Locale.ROOT);
+        if (!"XML".equals(this.dataType)) throw new IllegalArgumentException("Collector response format must be XML");
     }
 
     public EvChargerXmlParser.Page fetch(String task, String serviceKey, String zcode, int page, int rows) {
@@ -24,11 +42,11 @@ public class EvChargerClient {
             String decodedKey = serviceKey.contains("%")
                     ? URLDecoder.decode(serviceKey, StandardCharsets.UTF_8) : serviceKey;
             String query = "serviceKey=" + URLEncoder.encode(decodedKey, StandardCharsets.UTF_8)
-                    + "&pageNo=" + page + "&numOfRows=" + rows + "&dataType=XML&zcode=" + zcode;
+                    + "&pageNo=" + page + "&numOfRows=" + rows + "&dataType=" + dataType + "&zcode=" + zcode;
             // Poll about every five minutes with overlap for scheduling, paging, and network delay.
             if (task.equals("status")) query += "&period=10";
             String operation = task.equals("metadata") ? "getChargerInfo" : "getChargerStatus";
-            var url = URI.create("https://apis.data.go.kr/B552584/EvCharger/" + operation + "?" + query).toURL();
+            var url = baseUri.resolve(operation + "?" + query).toURL();
             connection = (HttpURLConnection) url.openConnection();
             connection.setConnectTimeout(5000);
             connection.setReadTimeout(20000);
