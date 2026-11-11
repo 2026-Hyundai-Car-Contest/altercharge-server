@@ -16,6 +16,7 @@
 - [06. 차량 상태·누적 주행거리 저장](#api-06)
 - [07. 최근 차량 기록 조회](#api-07)
 - [08. 최근 충전 이력 조회](#api-08)
+- [1차 제외 · 후속 개발 항목](#후속-개발)
 
 ---
 
@@ -27,6 +28,8 @@
 - 앱 로컬 DB를 사용하지 않는다는 기존 협업 가정을 반영해 차량 기록과 충전 이벤트 보관용 API를 제안. 단, 원문은 주행거리 기록과 다음 충전일 계산을 프론트엔드로 분류하며, 네트워크가 끊겨도 판정 갱신을 요구한다. 프론트 메모리 캐시·최소 로컬 지속 저장 여부는 별도 결정 필요.
 - GET은 URL Path/Query로 조회 조건을 전달하며 요청 Body가 없다. POST는 JSON Body를 사용. 모든 요청·응답 예시는 가상의 테스트 데이터.
 - 충전기 가용 수는 충전소 주차면 빈자리 수가 아니라 외부 API에서 충전 대기(코드 2) 상태인 충전기 수. 외부 데이터 갱신 지연·상태 미확인을 실제 빈자리로 해석하면 안 됨.
+- **REQ_ST_005 예외:** 주행 기록이 14일 미만이면 화면에 **「기록 수집 중」**을 표시하고, 프론트는 **SOC ≤ 30%**일 때만 충전을 권장한다. 이 판정값을 API 03의 `chargeRecommended`로 전달한다. 14일 이상이면 기존 충전 권장 판정 로직을 사용한다.
+- **REQ_ST_007 요금:** 충전 요금은 **1차 개발 범위에서 제외**되었으며, **1차 통과 후 추가 개발 항목**으로 관리한다. 따라서 현재 API 02 응답에는 요금 필드를 포함하지 않는다.
 
 ---
 
@@ -38,7 +41,7 @@
 - 날짜·시각은 JSON에서 모두 `String`으로 전달하며, `recordedAt`·`checkedAt` 같은 시각은 **ISO 8601 오프셋 포함** (`2026-11-11T01:30:00+09:00`), `from`·`to`는 `YYYY-MM-DD` 형식을 사용합니다. 필요하면 Kotlin 내부에서 `OffsetDateTime`/`LocalDate`로 파싱할 수 있습니다.
 - GET의 Query 값은 URL에서 모두 텍스트로 인코딩되지만, Retrofit `@Query` / `@Path`의 Kotlin 인수는 표에 적힌 `Double`, `Int`, `Boolean`, `String` 타입으로 선언할 수 있습니다.
 - `maxOutputKw`·`outputKw`는 출력값에 소수나 누락값이 올 수 있어 `Double?`로 표기했습니다. 기존 예시 JSON의 `100` 같은 정수 표기는 **그대로 유지**했습니다.
-- `feePerKwh` 등 데이터가 없을 수 있는 필드의 `?`는 프론트의 null 처리에 도움이 되도록 표시한 제안입니다. **일부 예외 상황의 null 응답 정책은 아직 미확정**이므로 확정 사양으로 간주하지 않습니다.
+- `maxOutputKw`, `drivableRangeKm` 등 데이터가 없을 수 있는 필드의 `?`는 프론트의 null 처리에 도움이 되도록 표시한 제안입니다. **일부 예외 상황의 null 응답 정책은 아직 미확정**이므로 확정 사양으로 간주하지 않습니다.
 - `StationSummaryDto`, `ChargerDto`, `RecommendedStationDto`, `VehicleSnapshotDto`는 **설명용 Kotlin 객체 클래스명**으로, 실제 코드에 존재한다고 가정하지 않습니다.
 
 ---
@@ -199,8 +202,6 @@ GET /api/v1/stations/ST-001
       "statusUpdatedAt": "2026-11-11T01:29:00+09:00"
     }
   ],
-  "feePerKwh": null,
-  "feeAvailable": false,
   "statusObservedAt": "2026-11-11T01:30:00+09:00"
 }
 ```
@@ -220,11 +221,9 @@ GET /api/v1/stations/ST-001
 | `chargers[].outputKw` | `number` | `Double?` | 출력(kW); 데이터 미제공 가능 |
 | `chargers[].status` | `string` | `String` | 충전기 상태 코드 문자열 |
 | `chargers[].statusUpdatedAt` | `string (date-time)` | `String` | 해당 충전기 상태 갱신 시각 |
-| `feePerKwh` | `number \| null` | `Double?` | 확인된 원/kWh 단가; 현재 예시 null |
-| `feeAvailable` | `boolean` | `Boolean` | 요금 데이터 제공 여부 |
 | `statusObservedAt` | `string (date-time)` | `String` | 충전소 상태 관측 시각 |
 
-**주의:** 요금은 요구사항에 있으나 첨부 한국환경공단 OpenAPI 가이드의 getChargerInfo/getChargerStatus에는 단가 필드가 확인되지 않는다. 요금 출처가 확정되기 전까지 null로 반환한다. 충전기 상태는 충전 대기(코드 2)만 가용으로 계산한다.
+**주의:** 충전기 상태는 충전 대기(코드 2)만 가용으로 계산한다. **충전 요금(REQ_ST_007)은 1차 범위에서 제외**되었으므로 `feePerKwh`, `feeAvailable` 같은 필드는 이번 응답 계약에 포함하지 않는다. 요금은 1차 통과 후 별도 개발 범위에서 정의한다.
 
 [↑ 목차로 돌아가기](#목차)
 
@@ -249,7 +248,18 @@ GET /api/v1/stations/ST-001
 | --- | --- | --- | --- |
 | `lat` | `Double` | `37.5500` | 현재 차량 위치의 위도 |
 | `lng` | `Double` | `127.1400` | 현재 차량 위치의 경도 |
-| `chargeRecommended` | `Boolean` | `true` | 프론트가 계산한 충전 권장 여부. true이면 급속 충전소만 후보 |
+| `chargeRecommended` | `Boolean` | `true` | 프론트가 계산한 충전 권장 여부. **기록 14일 미만이면 SOC ≤ 30% 기준**. true이면 급속 충전소만 후보 |
+
+### 충전 권장 판정 기준 (`REQ_ST_005` 예외)
+
+| 주행 기록 | 화면 표시 | 프론트의 `chargeRecommended` 계산 |
+| --- | --- | --- |
+| **14일 미만** | **기록 수집 중** | `socPercent <= 30` (30% 이하 `true`, 30% 초과 `false`) |
+| **14일 이상** | 기존 판정 결과 표시 | 기존 주행 기록 기반 충전 권장 로직 사용 |
+
+- **판정 위치:** 프론트(Kotlin). 백엔드는 `chargeRecommended`를 다시 계산하지 않고 전달받은 값으로 추천 대상을 선정한다.
+- **데이터 출처:** API 07의 주행 기록과 차량의 최신 SOC를 이용한다. 14일 판정에 쓸 유효 기록일의 세부 집계 기준은 프론트·백엔드 협의가 필요하다.
+- **예시:** 기록 12일 · SOC 30% → `true`, 기록 12일 · SOC 31% → `false`. 아래 요청 예시의 `true`는 첫 번째 상황에 해당할 수 있다.
 
 ### 요청 예시
 
@@ -294,7 +304,7 @@ GET /api/v1/stations/recommendation?lat=37.5500&lng=127.1400&chargeRecommended=t
 | `fallbackUsed` | `boolean` | `Boolean` | 대체 추천 사용 여부 |
 | `statusObservedAt` | `string (date-time)` | `String` | 충전소 상태 관측 시각 |
 
-**주의:** 후보: 반경 3km, 가용≥1, 운영중지·점검중 제외. chargeRecommended=true이면 급속만 후보. 방문 횟수 내림차순 → 거리 오름차순. 후보가 없으면 3km 내 최단거리 충전소로 대체. 다음 충전일·충전 권장은 프론트에서 계산하며 서버는 요청값을 사용한다.
+**주의:** 후보: 반경 3km, 가용≥1, 운영중지·점검중 제외. `chargeRecommended=true`이면 급속만 후보. 방문 횟수 내림차순 → 거리 오름차순. 후보가 없으면 3km 내 최단거리 충전소로 대체. 다음 충전일·충전 권장은 프론트에서 계산하며 서버는 요청값을 사용한다. **기록이 14일 미만인 경우에도 위 SOC 30% 기준으로 계산한 값을 그대로 전달한다.**
 
 [↑ 목차로 돌아가기](#목차)
 
@@ -554,9 +564,11 @@ GET /api/v1/vehicles/snapshots?vehicleId=mock-vehicle-001&from=2026-10-28&to=202
 | `records[].odometerKm` | `number` | `Double` | 누적 주행거리(km) |
 | `records[].drivableRangeKm` | `integer \| null` | `Int?` | 주행 가능 거리(km), SDK 확보 방식 미정 |
 | `retentionDays` | `integer` | `Int` | 서버 기록 보관 일수 |
-| `completeDayCount` | `integer` | `Int` | 자료가 완비된 일자 수 |
+| `completeDayCount` | `integer` | `Int` | 자료가 완비된 일자 수. **14일 미만 예외 판정에 활용** (유효일 산정 기준 협의 필요) |
 
-**주의:** 14일 미만 기록이면 일평균·예비거리·잔여일수는 산출하지 않는다. 운행하지 않은 날(0km)과 미수집일을 구분해야 하므로 전체 날짜별 수집 여부를 클라이언트에서 판단할 수 있도록 응답 확장 필요. 서버 저장소만으로 완전 오프라인 갱신은 불가능하다.
+**주의 (`REQ_ST_005`):** **유효 주행 기록이 14일 미만이면** 일평균·예비거리·잔여일수는 산출하지 않고 프론트에 **「기록 수집 중」**을 표시한다. **충전 권장 판정은 중단하지 않고 현재 SOC가 30% 이하인 경우에만 `true`**로 판정하여 API 03의 `chargeRecommended`로 전달한다. 14일 이상부터 기존 계산 로직을 사용한다.
+
+운행하지 않은 날(0km)과 미수집일을 구분해야 하므로 전체 날짜별 수집 여부를 클라이언트에서 판단할 수 있도록 응답 확장 필요. 서버 저장소만으로 완전 오프라인 갱신은 불가능하다.
 
 [↑ 목차로 돌아가기](#목차)
 
@@ -612,5 +624,19 @@ GET /api/v1/charging-events/latest?vehicleId=mock-vehicle-001
 | `distanceSinceChargeKm` | `number \| null` | `Double?` | 마지막 충전 후 주행거리(km) |
 
 **주의:** 충전완료 이벤트가 없거나 Mock 데이터만 있다면 null 또는 Mock 출처 표시가 필요하다. 계산된 충전 후 주행거리는 누적 오도미터의 차분이다.
+
+[↑ 목차로 돌아가기](#목차)
+
+---
+
+<a id="후속-개발"></a>
+
+## 1차 제외 · 후속 개발 항목
+
+### 충전 요금 (`REQ_ST_007`)
+
+- **현재 상태:** 1차 개발 명세에서 제외. **1차 통과 후 추가 개발**로 관리한다.
+- **이번 API 범위:** API 02 (`GET /api/v1/stations/{stationId}`)는 충전기 연결 타입·출력·상태 정보를 제공하고, 요금 관련 JSON 필드는 반환하지 않는다.
+- **추후 결정:** 요금의 의미(기본 단가 `원/kWh` 또는 이용자별 예상 결제 금액), 신뢰할 수 있는 데이터 출처, 적용 사업자·회원 조건, 요금 미제공 시 표시 정책을 확정한 뒤 API 계약에 추가한다.
 
 [↑ 목차로 돌아가기](#목차)
