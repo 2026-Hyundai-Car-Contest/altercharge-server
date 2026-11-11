@@ -1,6 +1,5 @@
 package com.server.altercharger_server.station.persistence;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -20,10 +19,4 @@ public interface StationRepository extends JpaRepository<StationEntity, String> 
     @Query("select distinct s from StationEntity s left join fetch s.chargers where s.stationId = :stationId")
     Optional<StationEntity> findWithChargers(@Param("stationId") String stationId);
 
-    @Query("""
-            select distinct s from StationEntity s left join fetch s.chargers
-            where s.zcode in :zcodes or s.stationId in :stationIds
-            """)
-    List<StationEntity> findSnapshotTargets(@Param("zcodes") Collection<String> zcodes,
-                                           @Param("stationIds") Collection<String> stationIds);
 }

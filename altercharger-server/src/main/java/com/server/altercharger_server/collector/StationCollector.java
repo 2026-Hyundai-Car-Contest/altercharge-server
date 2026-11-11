@@ -1,6 +1,5 @@
 package com.server.altercharger_server.collector;
 
-import com.server.altercharger_server.collector.EvChargerXmlParser.Item;
 import com.server.altercharger_server.collector.persistence.CollectorLedger;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.State;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.Usage;
@@ -11,12 +10,9 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import javax.sql.DataSource;
 import org.slf4j.Logger;
@@ -108,21 +104,22 @@ public class StationCollector {
         State state = ledger.state(task);
         if (state == null || state.retryAfter() != null && now.isBefore(state.retryAfter())
                 || state.succeededAt() != null && now.isBefore(state.succeededAt().plus(interval))) return;
-        try {
+        try (var snapshot = new CollectedSnapshot()) {
             ensureBudget(task, zcodes.size());
-            Map<String, List<Item>> regions = new LinkedHashMap<>();
             for (int regionIndex = 0; regionIndex < zcodes.size(); regionIndex++) {
                 String zcode = zcodes.get(regionIndex);
-                regions.put(zcode, downloadRegion(task, zcode, zcodes.size() - regionIndex - 1));
+                try (var writer = snapshot.openRegion(zcode)) {
+                    downloadRegion(task, zcode, zcodes.size() - regionIndex - 1, writer);
+                }
             }
             OffsetDateTime observedAt = now();
             if (task.equals("metadata")) {
-                store.saveMetadata(regions, observedAt);
+                store.saveMetadata(snapshot, observedAt);
             } else {
-                store.saveStatuses(regions.values().stream().flatMap(List::stream).toList(), observedAt);
+                store.saveStatuses(snapshot, observedAt);
             }
             log.info("Collector {} completed: regions={}, items={}, callsToday={}/{}", task, zcodes.size(),
-                    regions.values().stream().mapToInt(List::size).sum(), usage().calls(), dailyBudget);
+                    snapshot.itemCount(), usage().calls(), dailyBudget);
         } catch (Exception ex) {
             int failures = Math.min(state.failures() + 1, 10);
             OffsetDateTime retryAfter = ex instanceof BudgetExhausted
@@ -134,8 +131,7 @@ public class StationCollector {
         }
     }
 
-    private List<Item> downloadRegion(String task, String zcode, int remainingRegions) {
-        List<Item> all = new ArrayList<>();
+    private void downloadRegion(String task, String zcode, int remainingRegions, CollectedSnapshot.RegionWriter writer) {
         int page = 1;
         int expectedPages = 1;
         int initialTotal = -1;
@@ -167,14 +163,13 @@ public class StationCollector {
                 log.info("Collector {} region {}: total={}, pages={}, rows={}", task, zcode,
                         result.totalCount(), expectedPages, effectiveRows);
             }
-            all.addAll(result.items());
+            writer.append(result.items());
             page++;
         } while (page <= expectedPages);
-        if (task.equals("metadata") && initialTotal >= 0 && all.size() != initialTotal) {
+        if (task.equals("metadata") && initialTotal >= 0 && writer.itemCount() != initialTotal) {
             throw new CollectionException("Incomplete metadata snapshot; keeping the previous cache");
         }
         log.info("Collector {} region {} downloaded {} pages", task, zcode, page - 1);
-        return all;
     }
 
     private void ensureBudget(String task, int needed) {

@@ -1,7 +1,8 @@
 package com.server.altercharger_server.station;
 
+import com.server.altercharger_server.collector.CollectedSnapshot;
 import com.server.altercharger_server.collector.CollectionException;
-import com.server.altercharger_server.collector.EvChargerXmlParser.Item;
+import com.server.altercharger_server.collector.EvChargerJsonParser.Item;
 import com.server.altercharger_server.collector.persistence.CollectionStateRepository;
 import com.server.altercharger_server.station.persistence.ChargerEntity;
 import com.server.altercharger_server.station.persistence.ChargerId;
@@ -17,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -45,65 +48,86 @@ public class StationStore {
         return collectionStates.existsByTaskAndSucceededAtIsNotNull("metadata");
     }
 
-    /** A full regional download replaces its cache atomically, including soft deletions. */
+    /** Completed disk pages are validated before any replacement, then applied in one transaction. */
+    @Transactional
+    public void saveMetadata(CollectedSnapshot snapshot, OffsetDateTime observedAt) {
+        applyMetadata(snapshot.regionCodes(), snapshot::forEachBatch, observedAt);
+    }
+
+    /** Retains the in-process fixture/import contract; production uses the disk-backed overload. */
     @Transactional
     public void saveMetadata(Map<String, List<Item>> regions, OffsetDateTime observedAt) {
-        validateSnapshot(regions);
-        Set<String> incomingStationIds = regions.values().stream().flatMap(List::stream)
-                .filter(Item::hasIdentity).map(Item::statId).collect(Collectors.toSet());
-        Map<String, StationEntity> knownStations = stations.findSnapshotTargets(regions.keySet(), incomingStationIds)
-                .stream().collect(Collectors.toMap(StationEntity::getStationId, Function.identity()));
-        Map<ChargerId, ChargerEntity> knownChargers = new HashMap<>();
-        for (var station : knownStations.values()) {
-            for (var charger : station.getChargers()) {
-                knownChargers.put(charger.getId(), charger);
-                if (regions.containsKey(station.getZcode())) charger.setDeleted(true);
-            }
-        }
-        for (var region : regions.entrySet()) {
-            for (Item item : region.getValue()) {
-                if (!item.validMetadata()) continue;
-                StationEntity station = knownStations.get(item.statId());
-                boolean newStation = station == null;
-                if (newStation) {
-                    station = new StationEntity(item.statId());
-                    knownStations.put(item.statId(), station);
-                }
-                station.setName(item.statNm());
-                station.setAddress(item.addr());
-                station.setLat(item.lat());
-                station.setLng(item.lng());
-                station.setZcode(region.getKey());
-                station.setMetadataObservedAt(observedAt);
-                if (newStation) entityManager.persist(station);
+        applyMetadata(regions.keySet(), action -> regions.forEach((region, items) ->
+                forBatches(items, batch -> action.accept(region, batch))), observedAt);
+    }
 
-                ChargerId id = new ChargerId(item.statId(), item.chgerId());
-                ChargerEntity charger = knownChargers.get(id);
-                boolean newCharger = charger == null;
-                if (newCharger) {
-                    charger = new ChargerEntity(station, item.chgerId());
-                    station.getChargers().add(charger);
-                    knownChargers.put(id, charger);
-                }
-                charger.setRawConnectorType(item.chgerType());
-                charger.setOutputKw(item.output() != null && item.output() >= 0 ? item.output() : null);
-                charger.setDeleted(false);
-                if (canApplyStatus(charger, item.statUpdDt())) {
-                    applyStatus(charger, item.stat().isBlank() || item.stat().length() > 100 ? "0" : item.stat(),
-                            item.statUpdDt(), observedAt);
-                }
-                if (newCharger) entityManager.persist(charger);
-            }
-        }
+    private void applyMetadata(Set<String> regions, Batches source, OffsetDateTime observedAt) {
+        validateSnapshot(regions, source);
+        chargers.markDeletedForRegions(regions);
+        source.forEach((region, items) -> updateMetadataBatch(region, items, observedAt));
         markSucceeded("metadata", observedAt);
     }
 
-    /** Status is a change feed: mutate only known chargers and never replace the collection. */
+    private void updateMetadataBatch(String region, List<Item> items, OffsetDateTime observedAt) {
+        List<Item> valid = items.stream().filter(Item::validMetadata).toList();
+        if (valid.isEmpty()) return;
+        Set<String> stationIds = valid.stream().map(Item::statId).collect(Collectors.toSet());
+        Map<String, StationEntity> knownStations = stations.findAllById(stationIds).stream()
+                .collect(Collectors.toMap(StationEntity::getStationId, Function.identity()));
+        List<ChargerId> ids = valid.stream().map(item -> new ChargerId(item.statId(), item.chgerId())).toList();
+        Map<ChargerId, ChargerEntity> knownChargers = chargers.findByIds(ids).stream()
+                .collect(Collectors.toMap(ChargerEntity::getId, Function.identity()));
+        for (Item item : valid) {
+            StationEntity station = knownStations.get(item.statId());
+            boolean newStation = station == null;
+            if (newStation) {
+                station = new StationEntity(item.statId());
+                knownStations.put(item.statId(), station);
+            }
+            station.setName(item.statNm());
+            station.setAddress(item.addr());
+            station.setLat(item.lat());
+            station.setLng(item.lng());
+            station.setZcode(region);
+            station.setMetadataObservedAt(observedAt);
+            if (newStation) entityManager.persist(station);
+
+            ChargerId id = new ChargerId(item.statId(), item.chgerId());
+            ChargerEntity charger = knownChargers.get(id);
+            boolean newCharger = charger == null;
+            if (newCharger) charger = new ChargerEntity(station, item.chgerId());
+            charger.setRawConnectorType(item.chgerType());
+            charger.setOutputKw(item.output() != null && item.output() >= 0 ? item.output() : null);
+            charger.setDeleted(false);
+            if (canApplyStatus(charger, item.statUpdDt())) {
+                applyStatus(charger, item.stat().isBlank() || item.stat().length() > 100 ? "0" : item.stat(),
+                        item.statUpdDt(), observedAt);
+            }
+            if (newCharger) entityManager.persist(charger);
+        }
+        // Flush is not a commit: later failure rolls back every batch and the initial soft deletion.
+        entityManager.flush();
+        entityManager.clear();
+    }
+
+    /** Status is a change feed; omitted chargers and their observation times remain untouched. */
+    @Transactional
+    public void saveStatuses(CollectedSnapshot snapshot, OffsetDateTime observedAt) {
+        snapshot.forEachBatch((region, items) -> updateStatuses(items, observedAt));
+        markSucceeded("status", observedAt);
+    }
+
     @Transactional
     public void saveStatuses(List<Item> items, OffsetDateTime observedAt) {
-        Set<String> stationIds = items.stream().filter(Item::hasIdentity).map(Item::statId).collect(Collectors.toSet());
-        Map<ChargerId, ChargerEntity> known = stationIds.isEmpty() ? Map.of()
-                : chargers.findForStationIds(stationIds).stream()
+        forBatches(items, batch -> updateStatuses(batch, observedAt));
+        markSucceeded("status", observedAt);
+    }
+
+    private void updateStatuses(List<Item> items, OffsetDateTime observedAt) {
+        Set<ChargerId> ids = items.stream().filter(Item::hasIdentity)
+                .map(item -> new ChargerId(item.statId(), item.chgerId())).collect(Collectors.toSet());
+        if (ids.isEmpty()) return;
+        Map<ChargerId, ChargerEntity> known = chargers.findByIds(ids).stream()
                 .collect(Collectors.toMap(ChargerEntity::getId, Function.identity()));
         for (Item item : items) {
             if (!item.hasIdentity()) continue;
@@ -115,24 +139,41 @@ public class StationStore {
                 applyStatus(charger, item.stat(), item.statUpdDt(), observedAt);
             }
         }
-        markSucceeded("status", observedAt);
+        entityManager.flush();
+        entityManager.clear();
     }
 
-    private void validateSnapshot(Map<String, List<Item>> regions) {
-        if (regions.isEmpty() || regions.values().stream().anyMatch(List::isEmpty)) {
-            throw new CollectionException("Empty metadata snapshot; keeping the previous cache");
-        }
-        if (!hasCollectedData() && regions.values().stream().flatMap(List::stream).noneMatch(Item::validMetadata)) {
-            throw new CollectionException("Initial metadata snapshot contains no usable chargers");
-        }
+    private void validateSnapshot(Set<String> regions, Batches source) {
+        if (regions.isEmpty()) throw new CollectionException("Empty metadata snapshot; keeping the previous cache");
+        Map<String, Integer> counts = new HashMap<>();
         Set<ChargerId> identities = new HashSet<>();
-        for (var items : regions.values()) {
+        boolean[] hasValid = {false};
+        source.forEach((region, items) -> {
+            counts.merge(region, items.size(), Integer::sum);
             for (Item item : items) {
+                hasValid[0] |= item.validMetadata();
                 if (item.hasIdentity() && !identities.add(new ChargerId(item.statId(), item.chgerId()))) {
                     throw new CollectionException("Duplicate charger in metadata snapshot; keeping the previous cache");
                 }
             }
+        });
+        if (regions.stream().anyMatch(region -> counts.getOrDefault(region, 0) == 0)) {
+            throw new CollectionException("Empty metadata snapshot; keeping the previous cache");
         }
+        if (!hasValid[0] && !hasCollectedData()) {
+            throw new CollectionException("Initial metadata snapshot contains no usable chargers");
+        }
+    }
+
+    private static void forBatches(List<Item> items, Consumer<List<Item>> action) {
+        for (int start = 0; start < items.size(); start += CollectedSnapshot.BATCH_SIZE) {
+            action.accept(items.subList(start, Math.min(start + CollectedSnapshot.BATCH_SIZE, items.size())));
+        }
+    }
+
+    @FunctionalInterface
+    private interface Batches {
+        void forEach(BiConsumer<String, List<Item>> action);
     }
 
     private static boolean canApplyStatus(ChargerEntity charger, OffsetDateTime incomingTimestamp) {

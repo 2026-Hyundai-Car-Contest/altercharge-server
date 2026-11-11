@@ -12,12 +12,11 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class EvChargerClient {
-    private static final int MAX_RESPONSE_BYTES = 20 * 1024 * 1024;
-    private final EvChargerXmlParser parser;
+    private final EvChargerJsonParser parser;
     private final URI baseUri;
     private final String dataType;
 
-    public EvChargerClient(EvChargerXmlParser parser, @Value("${app.collector.base-url}") String baseUrl,
+    public EvChargerClient(EvChargerJsonParser parser, @Value("${app.collector.base-url}") String baseUrl,
                            @Value("${app.collector.data-type}") String dataType) {
         this.parser = parser;
         try {
@@ -32,10 +31,10 @@ public class EvChargerClient {
             throw new IllegalArgumentException("Collector base URL must be HTTPS without credentials, query, or fragment");
         }
         this.dataType = dataType.strip().toUpperCase(Locale.ROOT);
-        if (!"XML".equals(this.dataType)) throw new IllegalArgumentException("Collector response format must be XML");
+        if (!"JSON".equals(this.dataType)) throw new IllegalArgumentException("Collector response format must be JSON");
     }
 
-    public EvChargerXmlParser.Page fetch(String task, String serviceKey, String zcode, int page, int rows) {
+    public EvChargerJsonParser.Page fetch(String task, String serviceKey, String zcode, int page, int rows) {
         HttpURLConnection connection = null;
         try {
             // Accept either the portal's decoded key or its encoded key; encode exactly once.
@@ -51,12 +50,10 @@ public class EvChargerClient {
             connection.setConnectTimeout(5000);
             connection.setReadTimeout(20000);
             connection.setInstanceFollowRedirects(false);
-            connection.setRequestProperty("Accept", "application/xml");
+            connection.setRequestProperty("Accept", "application/json");
             if (connection.getResponseCode() != 200) throw new CollectionException("Upstream HTTP failure");
             try (var body = connection.getInputStream()) {
-                byte[] bytes = body.readNBytes(MAX_RESPONSE_BYTES + 1);
-                if (bytes.length > MAX_RESPONSE_BYTES) throw new CollectionException("Upstream XML exceeds the size limit");
-                return parser.parse(new String(bytes, StandardCharsets.UTF_8));
+                return parser.parse(body, connection.getContentType());
             }
         } catch (IOException | IllegalArgumentException ex) {
             // Network exceptions and URIs can contain the key. Never retain them as causes.

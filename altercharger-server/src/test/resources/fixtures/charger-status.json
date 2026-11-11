@@ -1,0 +1,19 @@
+{
+  "items": {
+    "item": [
+      {
+        "busiId": "ME", "statId": "ST-001", "chgerId": "01", "stat": "9",
+        "statUpdDt": "20200101120000", "lastTsdt": "", "lastTedt": "", "nowTsdt": ""
+      },
+      {
+        "busiId": "ME", "statId": "ST-001", "chgerId": "02", "stat": "77",
+        "statUpdDt": "invalid", "lastTsdt": "", "lastTedt": "", "nowTsdt": ""
+      }
+    ]
+  },
+  "resultCode": "00",
+  "resultMsg": "NORMAL SERVICE.",
+  "totalCount": "2",
+  "pageNo": "1",
+  "numOfRows": "10"
+}

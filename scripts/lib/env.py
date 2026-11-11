@@ -89,7 +89,7 @@ def read_env(path):
 def write_atomic(path, lines):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=".env-", dir=path.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix=".env.", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
             os.chmod(temporary, 0o600)
@@ -123,7 +123,8 @@ def initialize(args):
         if key in values and placeholder(values[key]) and not args.preserve_password_placeholders:
             values[key] = secrets.token_urlsafe(48)
             lines[positions[key]] = key + "='" + values[key] + "'"
-    if args.mode == "local" and "APP_DOMAIN" in values and placeholder(values["APP_DOMAIN"]):
+    if args.mode == "local" and "APP_DOMAIN" in values and (
+            "APP_DOMAIN" not in existing_keys or placeholder(values["APP_DOMAIN"])):
         lines[positions["APP_DOMAIN"]] = "APP_DOMAIN=localhost"
     if args.mode == "local" and "HTTPS_PORT" in values and "HTTPS_PORT" not in existing_keys:
         lines[positions["HTTPS_PORT"]] = "HTTPS_PORT=8443"
@@ -189,8 +190,8 @@ def validate(args):
         raise ConfigurationError("DATA_GO_KR_BASE_URL에는 사용자 정보나 쿼리가 없는 HTTPS 기본 주소가 필요합니다.")
     if url.port is not None and not 1 <= url.port <= 65535:
         raise ConfigurationError("DATA_GO_KR_BASE_URL의 포트 범위가 올바르지 않습니다.")
-    if values["DATA_GO_KR_DATA_TYPE"].upper() != "XML":
-        raise ConfigurationError("DATA_GO_KR_DATA_TYPE은 XML이어야 합니다.")
+    if values["DATA_GO_KR_DATA_TYPE"].upper() != "JSON":
+        raise ConfigurationError("DATA_GO_KR_DATA_TYPE은 JSON이어야 합니다.")
     if not re.fullmatch(r"[0-9]{2}(?:\s*,\s*[0-9]{2})*", values["DATA_GO_KR_ZCODES"]):
         raise ConfigurationError("DATA_GO_KR_ZCODES에는 두 자리 지역 코드를 입력해야 합니다.")
     integer(values, "DATA_GO_KR_STATUS_REFRESH_SECONDS", 300)

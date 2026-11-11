@@ -1,0 +1,21 @@
+{
+  "resultCode": "00",
+  "resultMsg": "NORMAL SERVICE.",
+  "totalCount": 2,
+  "pageNo": 1,
+  "numOfRows": 9999,
+  "items": {
+    "item": [
+      {
+        "statId": "ST-001", "statNm": "예시 충전소", "addr": "서울특별시 예시 주소",
+        "lat": "37.551", "lng": "127.141", "chgerId": "01", "chgerType": "06",
+        "output": "100.5", "stat": "2", "statUpdDt": "20261111200000", "delYn": "N"
+      },
+      {
+        "statId": "ST-001", "statNm": "예시 충전소", "addr": "서울특별시 예시 주소",
+        "lat": "37.551", "lng": "127.141", "chgerId": "02", "chgerType": "02",
+        "output": null, "stat": "57", "statUpdDt": "20261111195900", "delYn": "Y"
+      }
+    ]
+  }
+}
