@@ -4,7 +4,19 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
-    command: ["postgres", "-p", "${POSTGRES_PORT:?Set POSTGRES_PORT in .env}"]
+    mem_limit: 192m
+    command:
+      - postgres
+      - -p
+      - ${POSTGRES_PORT:?Set POSTGRES_PORT in .env}
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - work_mem=1MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - max_connections=20
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
       POSTGRES_USER: postgres
@@ -28,15 +40,26 @@ services:
       context: .
       dockerfile: Dockerfile.runtime
     restart: unless-stopped
+    mem_limit: 544m
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:?Set SPRING_PROFILES_ACTIVE in .env}
+      JAVA_TOOL_OPTIONS: >-
+        -Xms64m -Xmx224m
+        -XX:MaxMetaspaceSize=160m
+        -XX:MaxDirectMemorySize=32m
+        -XX:ReservedCodeCacheSize=64m
+        -Xss512k
+        -XX:+UseSerialGC
+        -XX:+ExitOnOutOfMemoryError
       APP_PORT: ${APP_PORT:?Set APP_PORT in .env}
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:${POSTGRES_PORT:?Set POSTGRES_PORT in .env}/${POSTGRES_DB:?Set POSTGRES_DB in .env}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "3"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "0"
       SPRING_JPA_HIBERNATE_DDL_AUTO: ${SPRING_JPA_HIBERNATE_DDL_AUTO:?Set SPRING_JPA_HIBERNATE_DDL_AUTO in .env}
       DATA_GO_KR_BASE_URL: ${DATA_GO_KR_BASE_URL:?Set DATA_GO_KR_BASE_URL in .env}
       DATA_GO_KR_SERVICE_KEY: ${DATA_GO_KR_SERVICE_KEY:?Set DATA_GO_KR_SERVICE_KEY in .env}
@@ -62,6 +85,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    mem_limit: 64m
     depends_on:
       app:
         condition: service_healthy
