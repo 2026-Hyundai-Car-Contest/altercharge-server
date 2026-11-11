@@ -8,6 +8,9 @@
 !altercharger-server/settings.gradle
 !altercharger-server/src/
 !altercharger-server/src/**
+# Runtime deployments contain only a runner-built JAR and Dockerfile.runtime.
+!app.jar
+!Dockerfile.runtime
 **/.git
 **/.gradle
 **/build
