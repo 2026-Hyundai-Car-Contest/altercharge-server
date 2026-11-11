@@ -126,6 +126,14 @@ secrets.json
 # Local PostgreSQL volumes
 postgres_data/
 pgdata/
+*.sql.gz
+*.dump
+*.backup
+
+# Exported local Caddy certificates and CA material
+local-ca.crt
+caddy_data/
+caddy_config/
 
 
 # ==========================================

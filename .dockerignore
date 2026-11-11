@@ -1,0 +1,25 @@
+# Only the backend build inputs enter the build context.
+**
+!altercharger-server/
+!altercharger-server/gradlew
+!altercharger-server/gradle/
+!altercharger-server/gradle/**
+!altercharger-server/build.gradle
+!altercharger-server/settings.gradle
+!altercharger-server/src/
+!altercharger-server/src/**
+**/.git
+**/.gradle
+**/build
+**/.env
+**/.env.*
+**/application-local.*
+**/application-secret.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/*.keystore
+**/credentials.json
+**/secrets.json
