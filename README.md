@@ -1,18 +1,627 @@
-# AlterCharge 백엔드
+# AlterCharge 백엔드 API 명세서
 
-Java 21 · Spring Boot 4.1.2 · Gradle Wrapper 9.8.2 · PostgreSQL. 구현된 업무 API는 충전소 조회 GET 2개다. 환경공단 XML을 정기 수집해 DB에 저장하고 앱 요청은 DB만 조회한다.
+버전 **0.2.0** · 요구사항정의서 v0.1(2026-11-10) 기반 · 업무 REST API **01~08 구현**. Java 21, Spring Boot 4.1.2, Gradle Wrapper 9.8.2, Spring Data JPA, PostgreSQL, Flyway를 사용한다. 아래 요청·응답의 충전소, 이벤트, 거리, 시각은 모두 가상의 테스트 데이터다.
 
-기존 8개 API 초안은 [후속 API 제안서](docs/api-proposals.md)에 보관했다. 구현 범위에 맞춰 `radiusKm`은 `Double`, 방문 데이터가 없는 `visitCount`는 `Int?` 및 `null`로 확정했다. 복합 규격 보존을 위해 상세 응답에 `connectorTypes`와 원본 코드를 추가했다. 추천·차량·이벤트·요금·인증 및 AWS 배포는 후속 범위다.
+MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식과 출력별 속도 구간은 기존 협업 설계안에 따른 구현 가정이다. 원문에서 프론트 담당인 충전 권장 여부·다음 충전일·화면 문구를 서버가 계산하지 않는다. 기존 API 초안 문서는 삭제했으며 현재 계약은 이 문서와 실제 OpenAPI를 기준으로 한다.
 
-## 실행
+`mock-user-001`, `mock-admin-001`, `mock-vehicle-001`은 DB 시연용 시드다. Mock ID는 인증 수단이 아니며, 현재 요청은 시연용 사용자·차량을 대상으로 한다. 실제 충전 이벤트 수신 경로가 검증되지 않아 외부 이벤트는 `MOCK`만 받는다. 운영용 인증과 사용자 격리 없이 위치·차량 기록을 외부에 공개하면 안 된다.
 
-Docker Desktop의 Linux 컨테이너 엔진과 Docker Compose가 필요하다. 저장소 루트에서 최초 한 번 설정한다.
+## 목차
+
+- [Base URL](#base-url)
+- [Swagger 문서](#swagger-문서)
+- [API 요약](#api-요약)
+- [공통 타입·오류·코드](#공통-타입오류코드)
+- [01. 주변 충전소 목록·검색](#api-01)
+- [02. 충전소 상세·충전기 상태](#api-02)
+- [03. 추천 충전소 1곳](#api-03)
+- [04. 길 안내 직전 상태 확인](#api-04)
+- [05. 충전 시작·완료 이벤트](#api-05)
+- [06. 차량 스냅샷 저장](#api-06)
+- [07. 최근 차량 기록](#api-07)
+- [08. 최근 충전 완료 이력](#api-08)
+- [환경공단 수집·캐시·Mock 정책](#환경공단-수집캐시mock-정책)
+- [1차 제외 범위](#1차-제외-범위)
+- [로컬 실행·DB 이전·검증](#로컬-실행db-이전검증)
+- [배포 상태](#배포-상태)
+
+## Base URL
+
+| 환경 | 주소 | 상태 |
+| --- | --- | --- |
+| 개발 | `https://localhost:8443` | Docker Compose Caddy. 로컬 CA 신뢰 설정 필요 |
+| 배포 | `https://YOUR_DOMAIN` | 자리표시자. 현재 배포된 주소가 아님 |
+
+기본 HTTPS 포트는 8443이며 `HTTPS_PORT`로 바꿀 수 있다. 앱 8080과 PostgreSQL 5432는 호스트에 공개하지 않는다.
+
+## Swagger 문서
+
+- 로컬 UI: [Swagger UI](https://localhost:8443/swagger-ui/index.html), 호환 경로 `https://localhost:8443/swagger-ui.html`
+- 로컬 JSON: [OpenAPI JSON](https://localhost:8443/v3/api-docs)
+- 배포 후: [배포 후 Swagger UI](https://YOUR_DOMAIN/swagger-ui/index.html), [OpenAPI JSON](https://YOUR_DOMAIN/v3/api-docs)
+
+`YOUR_DOMAIN` 링크는 배포 전 자리표시자다. 실제 도메인을 정하면 이 문서에서 교체한다. Swagger의 서버 주소는 상대 경로 `/`를 사용하므로 현재 접속한 HTTPS 호스트·포트를 따른다. 로컬 브라우저의 Try it out에도 Caddy 공개 루트 CA 신뢰 설정이 필요하다.
+
+## API 요약
+
+| 번호 | Method | URI | 기능 | 요구사항 ID |
+| --- | --- | --- | --- | --- |
+| [01](#api-01) | GET | `/api/v1/stations` | 주변 충전소 목록·검색 | REQ_ST_001, REQ_SL_001, REQ_SL_002, REQ_SL_004, REQ_SL_005, REQ_VS_006, REQ_CM_006 |
+| [02](#api-02) | GET | `/api/v1/stations/{stationId}` | 충전소·충전기 상세 | REQ_ST_007, REQ_SL_001 |
+| [03](#api-03) | GET | `/api/v1/stations/recommendation` | 방문·거리 기준 추천 1곳 | REQ_ST_005, REQ_ST_006, REQ_ST_007 |
+| [04](#api-04) | GET | `/api/v1/stations/{stationId}/navigation-check` | 목적지 안내 전 상태 판정 | REQ_EX_004, REQ_BR_004, REQ_BR_005 |
+| [05](#api-05) | POST | `/api/v1/charging-events` | 충전 시작·완료 이벤트 저장 | REQ_ST_008, REQ_VS_005, REQ_LG_002 |
+| [06](#api-06) | POST | `/api/v1/vehicles/snapshots` | 차량 상태·누적거리 저장 | REQ_JD_002, REQ_VS_001, REQ_VS_004 |
+| [07](#api-07) | GET | `/api/v1/vehicles/snapshots` | 최대 8주 차량 기록 | REQ_JD_002, REQ_LG_002, REQ_CM_006 |
+| [08](#api-08) | GET | `/api/v1/charging-events/latest` | 최근 충전 완료·거리 차분 | REQ_VS_005, REQ_LG_002 |
+
+모든 GET은 Body 없이 Path·Query를 사용한다. POST 요청과 모든 업무 응답은 `application/json`이다. Actuator health와 Swagger는 업무 API 8개 외의 구동·문서 경로다.
+
+## 공통 타입·오류·코드
+
+| JSON | Kotlin | 계약 |
+| --- | --- | --- |
+| string | `String` | ID의 앞자리 0 보존. 충전소명·주소는 원본 한국어 유지 |
+| integer | `Int` | SOC(%), 개수, 정수 거리(m) |
+| number | `Double` | 위·경도(도), 출력(kW), 누적거리(km). 주행가능거리는 `Int?` |
+| boolean | `Boolean` | true/false |
+| array | `List<T>` | 조회 0건은 `[]` |
+| null 허용 | `T?` | 알 수 없는 값을 0·빈 문자열로 만들지 않음 |
+| string(date-time) | `String` | ISO 8601 오프셋 필수. 예: `2026-11-11T01:30:00+09:00` |
+| string(date) | `String` | `YYYY-MM-DD`. 기록일·하루 중복은 `Asia/Seoul` 기준 |
+
+시각은 같은 순간이면 다른 UTC 오프셋 표기도 가능하다. 기록 시각은 UTC로 정규화하고 마이크로초 미만을 절삭한다. 나노초 입력도 허용하며 정규화한 시각으로 멱등성을 비교한다. 응답에 표시된 nullable 필드는 JSON `null`을 허용한다. 위·경도와 모든 실수는 NaN·무한대를 허용하지 않는다.
+
+공통 오류 응답(`ErrorResponse`, 서버 DTO `ApiError`)의 필드는 정확히 아래 2개다. API별 실제 오류는 각 응답 표에 명시한다. 외부 환경공단 호출은 비동기 수집이므로 업무 요청에 502를 임의로 반환하지 않는다. 현재 인증·레이트리미팅은 구현하지 않아 401·403·429를 계약에 넣지 않는다.
+
+```json
+{"error":"STATION_NOT_FOUND","message":"해당 충전소를 찾을 수 없습니다."}
+```
+
+| 필드 | JSON 타입 | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| error | string | `String` | 예 | `STATION_NOT_FOUND` | 프로그램이 분기할 오류 코드 |
+| message | string | `String` | 예 | 해당 충전소를 찾을 수 없습니다. | 한국어 안내. 내부 SQL·키·스택트레이스 제외 |
+
+정의된 API 외의 경로는 404 `{"error":"NOT_FOUND","message":"요청한 경로를 찾을 수 없습니다."}`, 지원하지 않는 HTTP 메서드는 405 `{"error":"METHOD_NOT_ALLOWED","message":"지원하지 않는 요청 방식입니다."}`다. POST의 잘못된 Content-Type·JSON은 400 INVALID_REQUEST_BODY로 통일한다. 각 표의 message는 대표 예시이며 검증 항목에 따라 구체적인 한국어 설명을 반환한다.
+
+충전기 상태는 기존 01·02의 문자열을 유지한다. 원본 코드와 길 안내 사유는 서로 다른 값이다.
+
+| 환경공단 stat | 응답 status | 의미 | 가용 수 포함 |
+| --- | --- | --- | --- |
+| 0 / 알 수 없는 코드 | UNKNOWN | 알 수 없음 | 아니오 |
+| 1 | COMMUNICATION_ERROR | 통신 이상 | 아니오 |
+| 2 | AVAILABLE | 충전 대기 | **예** |
+| 3 | CHARGING | 충전 중 | 아니오 |
+| 4 | STOPPED | 운영 중지 | 아니오 |
+| 5 | MAINTENANCE | 점검 중 | 아니오 |
+| 6 | RESERVED | 예약 중 | 아니오 |
+| 9 | UNCONFIRMED | 상태 미확인 | 아니오 |
+
+확정된 별도 고장 코드는 만들지 않는다. `availableCount`는 주차면 빈자리 수가 아니며, 오래된 `AVAILABLE`도 실시간 이용 가능 보장이 아니다.
+
+| 원본 chgerType | connectorTypes |
+| --- | --- |
+| 01 | `["DC_CHADEMO"]` |
+| 02 | `["AC_SLOW"]` |
+| 03 | `["DC_CHADEMO","AC_3PHASE"]` |
+| 04 | `["DC_COMBO"]` |
+| 05 | `["DC_CHADEMO","DC_COMBO"]` |
+| 06 | `["DC_CHADEMO","AC_3PHASE","DC_COMBO"]` |
+| 07 | `["AC_3PHASE"]` |
+| 08 | `["DC_COMBO_SLOW"]` |
+| 09 | `["NACS"]` |
+| 10 | `["DC_COMBO","NACS"]` |
+| 11 | `["DC_COMBO_2"]`(버스 전용 원본 코드) |
+| 그 외 | `["UNKNOWN"]` 및 원본 코드 보존 |
+
+상세 `connectorType`은 위 배열을 `+`로 연결한다. 복합 규격을 단일 규격으로 줄이지 않는다. 속도는 출력 `<50kW` → `SLOW`, `50~<200kW` → `FAST`, `>=200kW` → `ULTRA_FAST`, 출력 미제공 → `null`이다. 이 구간은 기획 설계안이며 공식 확정 분류가 아니다.
+
+| 구분 | 값 | 의미 |
+| --- | --- | --- |
+| 추천 reasonCode | VISITS_THEN_DISTANCE | 유효 후보를 실제 방문수 내림차순·거리·ID 순으로 선정 |
+| 추천 reasonCode | NEAREST_FALLBACK | 유효 후보가 없어 반경 내 최단거리 충전소 제시 |
+| 추천 reasonCode | NO_STATIONS_IN_RADIUS | 3km 안 충전소 없음. station=null |
+| 길 안내 reasonCode | OK | 유효기간 안의 AVAILABLE 충전기 존재 |
+| 길 안내 reasonCode | STATUS_STALE | 허용 가능한 가용 충전기가 없고 관측 시각 누락·만료 존재 |
+| 길 안내 reasonCode | OUT_OF_SERVICE | 운영 중지 상태 포함 |
+| 길 안내 reasonCode | MAINTENANCE | 점검 상태 포함 |
+| 길 안내 reasonCode | COMM_ERROR | 통신 이상 상태 포함 |
+| 길 안내 reasonCode | STATUS_UNKNOWN | 알 수 없거나 미확인 상태 포함 |
+| 길 안내 reasonCode | NO_AVAILABLE_CHARGER | 충전 중·예약 중 등으로 가용 충전기 없음 |
+| eventType | START / COMPLETE | 충전 시작 / 완료. END는 사용하지 않음 |
+| source | MOCK / REAL | 시연 / 검증된 실제 원천. **외부 입력은 MOCK만 허용** |
+
+<a id="api-01"></a>
+
+## 01. 주변 충전소 목록·검색
+
+요구사항: `REQ_ST_001`, `REQ_SL_001`, `REQ_SL_002`, `REQ_SL_004`, `REQ_SL_005`, `REQ_VS_006`, `REQ_CM_006`. PostgreSQL 캐시에서 반경 내 충전소를 검색한다. 요청마다 환경공단 API를 호출하지 않는다.
+
+`GET /api/v1/stations`
+
+| Query | JSON 의미 타입 | Kotlin | 필수 | 예시·기본값 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| lat | number | `Double` | 예 | 37.5500 | -90~90도 |
+| lng | number | `Double` | 예 | 127.1400 | -180~180도 |
+| radiusKm | number | `Double` | 아니오 | 기본 3 | 0 초과 3 이하(km) |
+| keyword | string | `String?` | 아니오 | 강동 / 빈 값 | 이름·주소 부분 검색 |
+| page | integer | `Int` | 아니오 | 기본 0 | 0 이상 |
+| size | integer | `Int` | 아니오 | 기본 20 | 1~200. 내부 DB 응답 단위 |
+
+```http
+GET /api/v1/stations?lat=37.5500&lng=127.1400&radiusKm=3&keyword=&page=0&size=20 HTTP/1.1
+Host: localhost:8443
+```
+
+Haversine 직선거리로 반경 필터링한 뒤 거리 오름차순 → stationId 오름차순으로 정렬하고 페이지를 나눈다.
+
+```json
+{
+  "items":[{
+    "stationId":"ST-001","name":"예시 충전소","address":"서울특별시 예시 주소",
+    "lat":37.551,"lng":127.141,"distanceMeters":142,
+    "availableCount":1,"totalValidCount":2,"chargerTypes":["AC_SLOW","DC_COMBO"],
+    "maxOutputKw":100.0,"visitCount":null,"statusObservedAt":"2026-11-11T01:30:00+09:00"
+  }],
+  "page":0,"size":20,"hasNext":false,"fetchedAt":"2026-11-11T01:31:00+09:00"
+}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수·null | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| items | array<object> | `List<StationSummaryDto>` | 예 | 위 예시 / `[]` | 현재 페이지 |
+| items[].stationId | string | `String` | 예 | ST-001 | 원본 statId |
+| items[].name | string | `String` | 예 | 예시 충전소 | 원본 한국어 이름 |
+| items[].address | string | `String` | 예 | 서울특별시 예시 주소 | 원본 한국어 주소 |
+| items[].lat / lng | number | `Double` | 예 | 37.551 / 127.141 | 위·경도(도) |
+| items[].distanceMeters | integer | `Int` | 예 | 142 | 직선거리(m), 반올림 |
+| items[].availableCount | integer | `Int` | 예 | 1 | stat=2 유효 충전기 수 |
+| items[].totalValidCount | integer | `Int` | 예 | 2 | 삭제·무효 제외 수 |
+| items[].chargerTypes | array<string> | `List<String>` | 예 | `["DC_COMBO"]` | 전체 규격 합집합, 문자열 정렬 |
+| items[].maxOutputKw | number/null | `Double?` | 예·허용 | 100.0 | 최대 출력(kW) |
+| items[].visitCount | integer/null | `Int?` | 예·허용 | null | 검증된 현재 사용자 실제 방문수. 미확인은 null |
+| items[].statusObservedAt | string/null | `String?` | 예·허용 | 위 시각 | 유효 충전기 중 가장 오래된 관측 시각 |
+| page / size | integer | `Int` | 예 | 0 / 20 | 요청 페이지·크기 |
+| hasNext | boolean | `Boolean` | 예 | false | 다음 페이지 존재 |
+| fetchedAt | string | `String` | 예 | 위 시각 | DB 조회 응답 생성 시각 |
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 200 | 정상 / 검색 0건 | 위 정상 JSON / `{"items":[],"page":0,"size":20,"hasNext":false,"fetchedAt":"2026-11-11T01:31:00+09:00"}` |
+| 400 | 좌표·반경·페이지·필수 Query 오류 | `{"error":"INVALID_REQUEST","message":"요청 파라미터의 형식과 필수 값을 확인해 주세요."}` |
+| 503 | 초기 수집 데이터 없음 | `{"error":"STATION_DATA_UNAVAILABLE","message":"아직 수집된 충전소 데이터가 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+[↑ 목차](#목차)
+
+<a id="api-02"></a>
+
+## 02. 충전소 상세·충전기 상태
+
+요구사항: `REQ_ST_007`, `REQ_SL_001`. 원본 충전소와 충전기 상태를 조회한다. 요금은 1차 제외다.
+
+`GET /api/v1/stations/{stationId}`
+
+| Path | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| stationId | string | `String` | 예 | ST-001 | 실제 요청은 환경공단 statId 사용 |
+
+```http
+GET /api/v1/stations/ST-001 HTTP/1.1
+Host: localhost:8443
+```
+
+```json
+{
+  "stationId":"ST-001","name":"예시 충전소","address":"서울특별시 예시 주소",
+  "lat":37.551,"lng":127.141,"availableCount":1,"totalValidCount":2,
+  "chargers":[{
+    "chargerId":"01","connectorType":"DC_COMBO","connectorTypes":["DC_COMBO"],
+    "chgerType":"04","outputKw":100.0,"status":"AVAILABLE","stat":"2",
+    "statusUpdatedAt":"2026-11-11T01:29:00+09:00","statusObservedAt":"2026-11-11T01:30:00+09:00"
+  },{
+    "chargerId":"02","connectorType":"AC_SLOW","connectorTypes":["AC_SLOW"],
+    "chgerType":"02","outputKw":null,"status":"CHARGING","stat":"3",
+    "statusUpdatedAt":null,"statusObservedAt":"2026-11-11T01:30:00+09:00"
+  }],
+  "statusObservedAt":"2026-11-11T01:30:00+09:00"
+}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수·null | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| stationId / name / address | string | `String` | 예 | 위 예시 | 원본 ID·한국어 이름·주소 |
+| lat / lng | number | `Double` | 예 | 37.551 / 127.141 | 위·경도(도) |
+| availableCount / totalValidCount | integer | `Int` | 예 | 1 / 2 | 가용 수 / 삭제·무효 제외 수 |
+| chargers | array<object> | `List<ChargerDto>` | 예 | 위 예시 | chargerId 문자열 오름차순 |
+| chargers[].chargerId | string | `String` | 예 | 01 | 앞자리 0 보존 |
+| chargers[].connectorType | string | `String` | 예 | DC_COMBO | 복합 규격이면 `+` 연결 |
+| chargers[].connectorTypes | array<string> | `List<String>` | 예 | `["DC_COMBO"]` | 모든 정규화 규격 |
+| chargers[].chgerType | string | `String` | 예 | 04 | 환경공단 원본 연결 코드 |
+| chargers[].outputKw | number/null | `Double?` | 예·허용 | 100.0 / null | 출력(kW). 미제공·무효는 null |
+| chargers[].status | string | `String` | 예 | AVAILABLE | 공통 상태표 참조 |
+| chargers[].stat | string | `String` | 예 | 2 | 환경공단 원본 상태 코드 |
+| chargers[].statusUpdatedAt | string/null | `String?` | 예·허용 | 위 시각 / null | 원천 statUpdDt 변경 시각 |
+| chargers[].statusObservedAt | string/null | `String?` | 예·허용 | 위 시각 | 해당 충전기 서버 관측 시각 |
+| statusObservedAt | string/null | `String?` | 예·허용 | 위 시각 | 유효 충전기 중 가장 오래된 관측 시각 |
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 200 | 정상 | 위 정상 JSON |
+| 404 | 수집된 자료에 충전소 없음 | `{"error":"STATION_NOT_FOUND","message":"해당 충전소를 찾을 수 없습니다."}` |
+| 503 | 초기 수집 데이터 없음 | `{"error":"STATION_DATA_UNAVAILABLE","message":"아직 수집된 충전소 데이터가 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+[↑ 목차](#목차)
+
+<a id="api-03"></a>
+
+## 03. 추천 충전소 1곳
+
+요구사항: `REQ_ST_005`, `REQ_ST_006`, `REQ_ST_007`. 프론트의 충전 권장 판정값을 받아 서버 캐시의 후보 1곳을 고른다.
+
+`GET /api/v1/stations/recommendation`
+
+| Query | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| lat | number | `Double` | 예 | 37.5500 | -90~90도 |
+| lng | number | `Double` | 예 | 127.1400 | -180~180도 |
+| chargeRecommended | boolean | `Boolean` | 예 | true | 프론트 판정값. 서버 재계산 없음 |
+
+```http
+GET /api/v1/stations/recommendation?lat=37.5500&lng=127.1400&chargeRecommended=true HTTP/1.1
+Host: localhost:8443
+```
+
+3km 이내에서 가용 충전기가 1개 이상인 충전소를 검토한다. `chargeRecommended=true`면 **가용 충전기 중 출력 50kW 이상**이 있어야 하며, false면 완속도 후보에 포함한다. 검증된 사용자별 실제 방문 횟수 내림차순 → 거리 오름차순 → stationId 오름차순이다. 방문 원천이 없으면 비교 계산에만 0을 쓰고 응답은 `null`을 유지한다.
+
+유효 후보가 없으면 반경 내 최단거리 충전소를 `fallbackUsed=true`로 반환한다. 이 후보는 운영 중지·점검·충전 중일 수 있으며 충전 가능을 뜻하지 않는다. 프론트는 안내 직전 API 04를 호출한다.
+
+```json
+{
+  "station":{"stationId":"ST-001","name":"예시 충전소","distanceMeters":142,
+    "availableCount":1,"visitCount":null,"speedCategory":"FAST","maxOutputKw":100.0},
+  "reasonCode":"VISITS_THEN_DISTANCE","fallbackUsed":false,
+  "statusObservedAt":"2026-11-11T01:30:00+09:00"
+}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수·null | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| station | object/null | `RecommendedStationDto?` | 예·허용 | 위 객체 / null | 반경 내 충전소가 없으면 null |
+| station.stationId / name | string | `String` | 객체 내 예 | ST-001 / 예시 충전소 | 원본 ID·한국어 이름 |
+| station.distanceMeters | integer | `Int` | 객체 내 예 | 142 | 직선거리(m) |
+| station.availableCount | integer | `Int` | 객체 내 예 | 1 | stat=2 유효 수. 대체 후보는 0 가능 |
+| station.visitCount | integer/null | `Int?` | 객체 내 예·허용 | null | 검증된 실제 방문수. Mock 제외 |
+| station.speedCategory | string/null | `String?` | 객체 내 예·허용 | FAST | SLOW / FAST / ULTRA_FAST. 출력 미제공 null |
+| station.maxOutputKw | number/null | `Double?` | 객체 내 예·허용 | 100.0 | 충전소 최대 출력(kW) |
+| reasonCode | string | `String` | 예 | VISITS_THEN_DISTANCE | 공통 추천 사유표의 3개 값 |
+| fallbackUsed | boolean | `Boolean` | 예 | false | 최단거리 대체 후보 여부 |
+| statusObservedAt | string/null | `String?` | 예·허용 | 위 시각 / null | 선택 충전소의 보수적 관측 시각 |
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 200 | 정상 추천 | 위 정상 JSON |
+| 200 | 대체 추천 | `{"station":{"stationId":"ST-002","name":"예시 중지 충전소","distanceMeters":100,"availableCount":0,"visitCount":null,"speedCategory":null,"maxOutputKw":null},"reasonCode":"NEAREST_FALLBACK","fallbackUsed":true,"statusObservedAt":"2026-11-11T01:30:00+09:00"}` |
+| 200 | 반경 3km 충전소 0건 | `{"station":null,"reasonCode":"NO_STATIONS_IN_RADIUS","fallbackUsed":false,"statusObservedAt":null}` |
+| 400 | 필수 Query·타입·좌표 오류 | `{"error":"INVALID_REQUEST","message":"요청 파라미터의 형식과 필수 값을 확인해 주세요."}` |
+| 503 | 초기 데이터 조회 불가 | `{"error":"STATION_DATA_UNAVAILABLE","message":"아직 수집된 충전소 데이터가 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+`REQ_ST_005` 예외: 유효 기록 **14일 미만**이면 프론트가 **「기록 수집 중」**을 표시하고 SOC **30% 이하**일 때만 `chargeRecommended=true`로 보낸다. 14일 이상이면 기존 프론트 로직을 사용한다. 다음 충전일도 프론트 책임이다.
+
+[↑ 목차](#목차)
+
+<a id="api-04"></a>
+
+## 04. 길 안내 직전 상태 확인
+
+요구사항: `REQ_EX_004`, `REQ_BR_004`, `REQ_BR_005`. 저장된 상태와 관측 시각으로 안내 허용 여부만 판단한다. 경로 생성·목적지 변경은 프론트 Pleos NaviHelper가 담당한다.
+
+`GET /api/v1/stations/{stationId}/navigation-check`
+
+| Path | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| stationId | string | `String` | 예 | ST-001 | 환경공단 원본 statId |
+
+```http
+GET /api/v1/stations/ST-001/navigation-check HTTP/1.1
+Host: localhost:8443
+```
+
+충전기별 관측 시각이 현재부터 `STATION_STATUS_MAX_AGE_MINUTES`(기본 15분) 이내이고 상태가 AVAILABLE이면 다른 충전기가 오래됐어도 허용한다. 오래된 AVAILABLE만으로는 허용하지 않는다. 허용 가능한 가용 충전기가 없으면 **관측시각 누락·미래·만료(STATUS_STALE) → 운영 중지 → 점검 → 통신 이상 → 알 수 없음·미확인 → 충전 중·예약 중** 순으로 대표 차단 사유를 정한다.
+
+```json
+{
+  "stationId":"ST-001","navigationAllowed":true,"reasonCode":"OK",
+  "latestStatuses":["AVAILABLE","CHARGING"],"checkedAt":"2026-11-11T01:31:00+09:00"
+}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| stationId | string | `String` | 예 | ST-001 | 충전소 ID |
+| navigationAllowed | boolean | `Boolean` | 예 | true | 신선한 가용 충전기 존재 시에만 true |
+| reasonCode | string | `String` | 예 | OK | 공통 길 안내 사유표의 7개 값 |
+| latestStatuses | array<string> | `List<String>` | 예 | `["AVAILABLE","CHARGING"]` | 02와 동일한 상태 문자열 목록 |
+| checkedAt | string | `String` | 예 | 위 시각 | 서버 판정 시각. 외부 실시간 조회 시각 아님 |
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 200 | 안내 허용 | 위 정상 JSON |
+| 200 | 정상 차단(예: 오래된 상태) | `{"stationId":"ST-001","navigationAllowed":false,"reasonCode":"STATUS_STALE","latestStatuses":["AVAILABLE"],"checkedAt":"2026-11-11T01:31:00+09:00"}` |
+| 404 | 충전소 없음 | `{"error":"STATION_NOT_FOUND","message":"해당 충전소를 찾을 수 없습니다."}` |
+| 503 | 사용할 초기 상태 데이터 없음 | `{"error":"STATION_DATA_UNAVAILABLE","message":"아직 수집된 충전소 데이터가 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+운영 중지·점검·통신 이상·만료는 정상 판정이므로 200 + false다. 503은 조회 자체가 불가능한 경우이며 오래됐다는 이유만으로 502를 사용하지 않는다.
+
+[↑ 목차](#목차)
+
+<a id="api-05"></a>
+
+## 05. 충전 시작·완료 이벤트
+
+요구사항: `REQ_ST_008`, `REQ_VS_005`, `REQ_LG_002`. 시연용 이벤트를 저장하며 COMPLETE는 API 08의 최근 충전 기록에 사용한다.
+
+`POST /api/v1/charging-events`
+
+| JSON Body | JSON | Kotlin | 필수 | 예시·기본값 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| eventId | string | `String` | 예 | evt-001 | 1~100자, 전역 멱등 이벤트 식별자 |
+| vehicleId | string | `String` | 예 | mock-vehicle-001 | 1~100자 시드 차량 ID |
+| eventType | string | `String` | 예 | START | START / COMPLETE |
+| source | string | `String?` | 아니오 | 기본 MOCK | 외부 REAL 요청은 400 |
+| occurredAt | string | `String` | 예 | 2026-11-11T01:00:00+09:00 | 오프셋 필수, 최근 보관기간~현재+5분 |
+| lat / lng | number | `Double` | 예 | 37.5509 / 127.1409 | -90~90 / -180~180도 |
+| socPercent | integer | `Int` | 예 | 35 | 0~100(%) |
+| odometerKm | number/null | `Double?` | 아니오 | 20350.4 / null | 누적거리(km), 0 이상 |
+
+```http
+POST /api/v1/charging-events HTTP/1.1
+Host: localhost:8443
+Content-Type: application/json
+
+{"eventId":"evt-001","vehicleId":"mock-vehicle-001","eventType":"START","source":"MOCK","occurredAt":"2026-11-11T01:00:00+09:00","lat":37.5509,"lng":127.1409,"socPercent":35,"odometerKm":20350.4}
+```
+
+```json
+{"eventId":"evt-001","accepted":true,"matchedStationId":"ST-001","visitCountAdded":0,"dailyDuplicate":false}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수·null | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| eventId | string | `String` | 예 | evt-001 | 보낸 이벤트 ID |
+| accepted | boolean | `Boolean` | 예 | true | 저장 또는 동일 내용 재전송 수락 |
+| matchedStationId | string/null | `String?` | 예·허용 | ST-001 / null | 이벤트 위치 100m 이내 최단거리·ID 순 매칭 |
+| visitCountAdded | integer | `Int` | 예 | 0 | 외부 MOCK 이벤트는 실제 방문 추가 0 |
+| dailyDuplicate | boolean | `Boolean` | 예 | false | 실제 방문의 사용자·충전소·서울 날짜 하루 중복 여부. MOCK은 실제 집계에 넣지 않음 |
+
+같은 eventId의 동일 내용은 보관기간이 지났어도 기존 결과를 200으로 반환한다. 같은 ID에 다른 내용이면 409다. 생략한 source는 MOCK으로 정규화한다. 실제 방문은 검증된 REAL START에만 반경 100m와 하루 1회 조건을 적용하며, 현재 외부 요청이 REAL 집계 경로에 접근할 수는 없다. Mock 입력으로 추천 방문 순위를 조작하지 않는다.
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 201 | 신규 저장 | 위 정상 JSON |
+| 200 | 동일 이벤트 재전송 | 최초 수락한 결과와 동일 JSON |
+| 400 | Body·시각·범위·REAL 입력 오류 | `{"error":"INVALID_REQUEST_BODY","message":"요청 본문의 필수 값, 자료형, 범위를 확인해 주세요."}` |
+| 404 | 차량 없음 | `{"error":"VEHICLE_NOT_FOUND","message":"해당 차량을 찾을 수 없습니다."}` |
+| 409 | 같은 eventId에 다른 내용 | `{"error":"EVENT_ID_CONFLICT","message":"같은 eventId에 다른 이벤트 내용이 저장되어 있습니다."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+매칭할 충전소 캐시가 없거나 100m 안 충전소가 없으면 matchedStationId는 null이다. 이벤트 기록 수락을 실측 충전 완료 인증으로 해석하지 않는다.
+
+[↑ 목차](#목차)
+
+<a id="api-06"></a>
+
+## 06. 차량 스냅샷 저장
+
+요구사항: `REQ_JD_002`, `REQ_VS_001`, `REQ_VS_004`. 프론트 수집 원본을 서버에 보관한다. 충전 권장값·다음 충전일은 생성하지 않는다.
+
+`POST /api/v1/vehicles/snapshots`
+
+| JSON Body | JSON | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| vehicleId | string | `String` | 예 | mock-vehicle-001 | 1~100자 시드 차량 ID |
+| recordedAt | string | `String` | 예 | 2026-11-11T01:30:00+09:00 | 오프셋 필수. 최근 보관기간~현재+5분 |
+| socPercent | integer | `Int` | 예 | 62 | 0~100(%) |
+| odometerKm | number | `Double` | 예 | 20350.4 | 누적거리(km), 0 이상 |
+| drivableRangeKm | integer/null | `Int?` | 아니오 | 235 / null | 주행가능거리(km), 0 이상. SDK 출처 미확정 |
+
+```http
+POST /api/v1/vehicles/snapshots HTTP/1.1
+Host: localhost:8443
+Content-Type: application/json
+
+{"vehicleId":"mock-vehicle-001","recordedAt":"2026-11-11T01:30:00+09:00","socPercent":62,"odometerKm":20350.4,"drivableRangeKm":null}
+```
+
+```json
+{"snapshotId":"00000000-0000-4000-8000-000000000001","saved":true,"recordedAt":"2026-11-10T16:30:00Z"}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| snapshotId | string | `String` | 예 | 위 UUID | 서버 생성 저장 식별자 |
+| saved | boolean | `Boolean` | 예 | true | 저장 또는 동일 재전송 성공 |
+| recordedAt | string | `String` | 예 | 위 UTC 시각 | 요청과 같은 순간의 오프셋 시각 |
+
+vehicleId + recordedAt의 같은 순간을 고유 키로 사용한다. 같은 수치의 재전송은 같은 snapshotId를 200으로 반환하고 다른 수치이면 409다. 신규 기록의 허용 시간은 현재 서울 날짜 기준 최근 56일이며, 미래는 기본 5분까지다. 기존 동일 스냅샷이 남아 있으면 재전송에 시간 제한을 다시 적용하지 않으며, 정리된 과거 기록은 새 요청으로 검사한다. 설정값은 실행 절을 참고한다.
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 201 | 신규 저장 | 위 정상 JSON |
+| 200 | 동일 스냅샷 재전송 | 기존 snapshotId·saved=true·recordedAt |
+| 400 | Body·SOC·거리·시각 오류 | `{"error":"INVALID_REQUEST_BODY","message":"요청 본문의 필수 값, 자료형, 범위를 확인해 주세요."}` |
+| 404 | 차량 없음 | `{"error":"VEHICLE_NOT_FOUND","message":"해당 차량을 찾을 수 없습니다."}` |
+| 409 | 같은 차량·시각에 다른 수치 | `{"error":"SNAPSHOT_CONFLICT","message":"같은 차량과 측정 시각에 다른 값이 저장되어 있습니다."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+[↑ 목차](#목차)
+
+<a id="api-07"></a>
+
+## 07. 최근 차량 기록
+
+요구사항: `REQ_JD_002`, `REQ_LG_002`, `REQ_CM_006`. 최대 최근 8주 원본 스냅샷을 반환한다. 평균 주행거리와 충전 권장 계산은 프론트 책임이다.
+
+`GET /api/v1/vehicles/snapshots`
+
+| Query | JSON 의미 타입 | Kotlin | 필수 | 예시·기본값 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| vehicleId | string | `String` | 예 | mock-vehicle-001 | 차량 ID |
+| from | string(date) | `String?` | 아니오 | 기본 오늘-55일 | YYYY-MM-DD, 서울 날짜 |
+| to | string(date) | `String?` | 아니오 | 기본 오늘 | YYYY-MM-DD, 시작일 이하 불가 |
+
+```http
+GET /api/v1/vehicles/snapshots?vehicleId=mock-vehicle-001&from=2026-10-28&to=2026-11-11 HTTP/1.1
+Host: localhost:8443
+```
+
+요청 범위를 현재 보관 창과 오늘까지로 제한한다. 날짜 범위 양끝을 포함하며 측정 시각 오름차순으로 반환한다. 동일 시각의 레코드는 차량별 고유하다. 차량별 조회를 분리하고, 미수집일을 0km로 채우지 않는다.
+
+```json
+{
+  "vehicleId":"mock-vehicle-001",
+  "records":[{
+    "snapshotId":"00000000-0000-4000-8000-000000000001","recordedAt":"2026-11-11T00:30:00+09:00","socPercent":65,
+    "odometerKm":20332.0,"drivableRangeKm":null
+  },{
+    "snapshotId":"00000000-0000-4000-8000-000000000002","recordedAt":"2026-11-11T01:30:00+09:00","socPercent":62,
+    "odometerKm":20350.4,"drivableRangeKm":235
+  }],
+  "retentionDays":56,"completeDayCount":0
+}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수·null | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| vehicleId | string | `String` | 예 | mock-vehicle-001 | 조회 차량 |
+| records | array<object> | `List<VehicleSnapshotDto>` | 예 | 위 배열 / `[]` | 측정 시각 오름차순 |
+| records[].snapshotId | string | `String` | 예 | 위 UUID | 저장 식별자 |
+| records[].recordedAt | string | `String` | 예 | 위 시각 | 오프셋 측정 시각 |
+| records[].socPercent | integer | `Int` | 예 | 62 | SOC(%) |
+| records[].odometerKm | number | `Double` | 예 | 20350.4 | 누적거리(km) |
+| records[].drivableRangeKm | integer/null | `Int?` | 예·허용 | 235 / null | 주행가능거리(km) |
+| retentionDays | integer | `Int` | 예 | 56 | 서버 스냅샷 보관일 수 |
+| completeDayCount | integer | `Int` | 예 | 0 | 아래 보수적 기준을 충족한 유효 기록일 수 |
+
+유효 기록일은 서울 날짜별 **2개 이상** 기록이 있고, **첫 측정 01:00 이하·마지막 측정 23:00 이상**, 인접 측정 간격 **6시간 이하**, 누적거리 감소 없음이 모두 성립한 날이다. 같은 누적거리의 0km는 허용하되 누락을 정상 운행일로 가정하지 않는다. 예시의 2개 새벽 기록은 하루를 덮지 않아 completeDayCount=0이다. 이는 연속 센서 수집의 보장이 아니라 실제 저장 자료에 적용한 보수적 판정 기준이다.
+
+`completeDayCount<14`이면 프론트는 「기록 수집 중」을 표시하고 SOC<=30%일 때만 충전을 권장한다. 14일 이상이면 기존 프론트 로직을 사용한다. 서버 응답에는 chargeRecommended·다음 충전일이 없다.
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 200 | 정상 / 기록 없음 | 위 정상 JSON / `{"vehicleId":"mock-vehicle-001","records":[],"retentionDays":56,"completeDayCount":0}` |
+| 400 | 필수 Query·날짜 형식·역전 범위 오류 | `{"error":"INVALID_REQUEST","message":"요청 파라미터의 형식과 필수 값을 확인해 주세요."}` |
+| 404 | 차량 없음 | `{"error":"VEHICLE_NOT_FOUND","message":"해당 차량을 찾을 수 없습니다."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+[↑ 목차](#목차)
+
+<a id="api-08"></a>
+
+## 08. 최근 충전 완료 이력
+
+요구사항: `REQ_VS_005`, `REQ_LG_002`. 마지막 COMPLETE와 최근 보관된 차량 스냅샷을 조회한다. 시연용 결과는 source=MOCK·trusted=false로 표시한다.
+
+`GET /api/v1/charging-events/latest`
+
+| Query | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| vehicleId | string | `String` | 예 | mock-vehicle-001 | 차량 ID |
+
+```http
+GET /api/v1/charging-events/latest?vehicleId=mock-vehicle-001 HTTP/1.1
+Host: localhost:8443
+```
+
+```json
+{
+  "vehicleId":"mock-vehicle-001","lastChargeCompletedAt":"2026-11-10T21:10:00+09:00",
+  "odometerAtLastChargeKm":20310.0,"currentOdometerKm":20350.4,"distanceSinceChargeKm":40.4,
+  "source":"MOCK","trusted":false
+}
+```
+
+| 응답 필드 | JSON | Kotlin | 필수·null | 예시 | 설명 |
+| --- | --- | --- | --- | --- | --- |
+| vehicleId | string | `String` | 예 | mock-vehicle-001 | 조회 차량 |
+| lastChargeCompletedAt | string/null | `String?` | 예·허용 | 위 시각 / null | 마지막 COMPLETE 시각 |
+| odometerAtLastChargeKm | number/null | `Double?` | 예·허용 | 20310.0 | 완료 이벤트의 누적거리(km) |
+| currentOdometerKm | number/null | `Double?` | 예·허용 | 20350.4 | 최근 보관된 스냅샷 누적거리(km). COMPLETE가 없으면 null |
+| distanceSinceChargeKm | number/null | `Double?` | 예·허용 | 40.4 | 현재 누적거리 - 완료 당시 누적거리(km) |
+| source | string/null | `String?` | 예·허용 | MOCK / null | 마지막 완료 원천. 미존재면 null |
+| trusted | boolean | `Boolean` | 예 | false | 검증된 실제 이벤트 여부. 현재 외부 입력은 false |
+
+COMPLETE가 없으면 스냅샷이 있어도 차량 ID 외의 nullable 항목은 모두 null이고 trusted=false다. COMPLETE가 여러 개이면 occurredAt 내림차순, 동률이면 eventId 내림차순으로 결정한다. 완료 당시 오도미터가 없거나, 현재 스냅샷이 없거나 완료보다 이전이면 거리 차분은 null이다. 차분이 음수여도 null이며 절댓값을 만들지 않는다. 시작 이벤트가 없다는 이유로 시작 시각·거리 등 추가 실측값을 지어내지 않는다.
+
+| HTTP | 상황 | 본문 예시 |
+| --- | --- | --- |
+| 200 | 정상 | 위 정상 JSON |
+| 200 | 완료 이력·스냅샷 없음 | `{"vehicleId":"mock-vehicle-001","lastChargeCompletedAt":null,"odometerAtLastChargeKm":null,"currentOdometerKm":null,"distanceSinceChargeKm":null,"source":null,"trusted":false}` |
+| 400 | 필수 Query·차량 ID 형식 오류 | `{"error":"INVALID_REQUEST","message":"요청 파라미터의 형식과 필수 값을 확인해 주세요."}` |
+| 404 | 차량 없음 | `{"error":"VEHICLE_NOT_FOUND","message":"해당 차량을 찾을 수 없습니다."}` |
+| 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
+| 500 | 예상하지 못한 오류 | `{"error":"INTERNAL_SERVER_ERROR","message":"서버에서 요청을 처리하지 못했습니다."}` |
+
+[↑ 목차](#목차)
+
+## 환경공단 수집·캐시·Mock 정책
+
+[한국환경공단 OpenAPI](https://www.data.go.kr/data/15076352/openapi.do)의 getChargerInfo·getChargerStatus **XML**을 서버에서 안전하게 파싱해 PostgreSQL에 저장하고 앱에는 JSON으로 제공한다. 인증키는 서버 전용이며 응답·문서 예시·로그에 포함하지 않는다. 이름·주소는 원본 한국어를 유지한다. DTD·외부 엔터티를 비활성화하고 연결·읽기 시간 제한과 응답 크기 제한을 둔다.
+
+기본 수집 범위는 **서울(zcode=11)**이다. DATA_GO_KR_ZCODES로 설정한 지역만 정기 갱신하며 전국 데이터가 있다고 가정하지 않는다. 메타데이터는 최초 수집 후 하루 1회, 상태는 5분 주기를 목표로 수집한다. 상태 조회는 `period=10`으로 구간을 겹쳐 일반적인 실행 지연의 누락을 줄이고 원천 시각이 이전인 변경분으로 현재 값을 되돌리지 않는다. 상태는 변경분 병합이며 누락 항목을 삭제하지 않는다. 전체 지역 메타데이터 스냅샷의 삭제·무효 항목은 유효 충전기 수에서 제외한다.
+
+개발계정 하루 한도는 1,000회로 가정하며 앱 예산은 기본 900회로 100회 여유를 둔다. 일별 호출량·성공·재시도 시각을 DB에 저장하고 DB 잠금으로 중복 실행을 막는다. 실제 페이지·지역 수에 따라 요청을 차감하고 다음 페이지의 남은 예산을 검사한다. 지역당 상태 1페이지라면 한 지역은 하루 약 288회, 3개 지역은 약 864회이며 메타데이터·실패 비용이 추가된다. 여러 페이지이면 더 많은 호출이 필요하다.
+
+예산 부족·실패 시 보수적으로 재시도를 미루므로 5분 최신성을 보장하지 않는다. 기존 자료가 있으면 마지막 관측 시각과 함께 제공하고 최초 자료가 없으면 503이다. 장시간 중단 중 발생한 상태 변경은 일일 메타데이터 수집 때 복구될 수 있다. statusObservedAt은 실제 관측 시각, statusUpdatedAt은 원천 변경 시각, fetchedAt·checkedAt은 이번 요청 처리 시각이다. 변경분에 없는 충전기의 관측 시각을 새로 만들지 않는다. 따라서 상태가 오래 유지되어 변경분에 포함되지 않은 충전기도 관측 유효기간이 지나면 길 안내가 차단될 수 있다.
+
+Mock 이벤트는 영속 저장되지만 실제 방문 집계에 포함하지 않는다. 현재 실제 검증 경로가 없어 일반 요청의 visitCount는 알 수 없으면 null이다. 실제 방문 집계 구조는 검증된 REAL START만 사용자·충전소·서울 날짜 하루 1회로 계산하도록 분리되어 있다. 같은 키를 다른 앱에서도 사용하면 외부 전체 호출량을 따로 고려해야 한다.
+
+## 1차 제외 범위
+
+- 충전 요금(REQ_ST_007): 1차 통과 후 별도 계약. feePerKwh·feeAvailable 없음.
+- 주행 중 안내·음성 브리핑·거점 등록·시간대 점유 이력: 주차 화면 MVP 밖 기능.
+- 회원가입·로그인·어드민·차종 제원 API: 현재 구현 범위 밖 기능.
+- 충전 권장 여부·다음 충전일 서버 계산: 프론트 책임.
+- AWS 배포·CD·이미지 레지스트리 게시·자동 릴리스: 별도 작업.
+
+## 로컬 실행·DB 이전·검증
+
+Docker Desktop Linux 엔진, Docker Compose와 로컬 값이 필요하다. 루트에서 한 번 복사하고 .env를 로컬에서 채운다.
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-`.env`에 `POSTGRES_DB`, 일반 앱 계정 `POSTGRES_USER`, 서로 다른 강한 `POSTGRES_PASSWORD`와 `POSTGRES_ADMIN_PASSWORD`, 발급받은 `DATA_GO_KR_SERVICE_KEY`를 입력한다. 키는 디코딩 또는 URL 인코딩 키를 사용할 수 있다. 인증키·비밀번호는 커밋하거나 공유 로그에 넣지 않는다. 기본 `DATA_GO_KR_ZCODES=11`은 서울만 수집한다. 키 없이 구동만 확인하려면 `DATA_GO_KR_ENABLED=false`로 설정하며, 초기 데이터가 없으면 업무 API는 503이다.
+| 변수 | 예제·기본값 | 용도 |
+| --- | --- | --- |
+| POSTGRES_DB | altercharge | 앱 DB |
+| POSTGRES_USER | altercharge_app | 비관리자 앱 역할. postgres와 달라야 함 |
+| POSTGRES_PASSWORD | 로컬 강한 값 입력 | 앱 계정 비밀번호 |
+| POSTGRES_ADMIN_PASSWORD | 별도 강한 값 입력 | DB 초기화 관리자 비밀번호 |
+| DATA_GO_KR_SERVICE_KEY | YOUR_SERVICE_KEY_HERE | 서버 전용 키. 실제 키를 문서·커밋에 넣지 않음 |
+| DATA_GO_KR_ZCODES | 11 | 수집 지역 쉼표 목록 |
+| DATA_GO_KR_ENABLED | true | 키 없이 구동 점검 시 false |
+| DATA_GO_KR_NUM_OF_ROWS | 9999 | 한 요청 행 수, 10~9999 |
+| DATA_GO_KR_DAILY_BUDGET | 900 | 앱 하루 최대 호출 수, 최대 900 |
+| DATA_GO_KR_METADATA_BUDGET | 100 | 메타데이터 하루 예산 |
+| HTTPS_PORT | 8443 | 호스트 HTTPS 포트 |
+| STATION_STATUS_MAX_AGE_MINUTES | 15 | 길 안내 충전기 관측 유효기간, 1~1440분 |
+| HISTORY_RETENTION_DAYS | 56 | 스냅샷 보관기간, 1~56일 |
+| HISTORY_MAX_FUTURE_MINUTES | 5 | 저장 시각의 미래 허용 범위, 0~60분 |
+| FLYWAY_ADOPT_LEGACY_SCHEMA | false | 아래 기존 DB 이전 때만 일시 사용 |
+
+키는 디코딩 또는 한 번 URL 인코딩된 형태를 사용할 수 있다. 채팅 등으로 실제 키가 노출되었다면 재발급한다. .env·개인키·덤프는 Git에 넣지 않는다. 앱 DB 사용자는 해당 DB 스키마 권한만 갖고 관리자와 분리한다.
 
 ```bash
 docker compose up -d --build
@@ -22,139 +631,29 @@ docker compose logs --tail=100 caddy
 docker compose down
 ```
 
-`docker compose down` 후에도 DB와 Caddy CA는 named volume에 남는다. **`docker compose down -v`는 DB와 CA를 삭제한다.** 계정 생성은 새 DB 볼륨의 첫 시작 때 실행하므로 이후 `.env` 암호만 바꾸면 기존 DB 계정 암호는 바뀌지 않는다. 앱은 DB 준비 후, Caddy는 앱 health 확인 후 시작한다. 앱 DB 계정은 비관리자이며 해당 DB·스키마 권한만 갖는다.
+앱은 PostgreSQL health 이후, Caddy는 앱 health 이후 시작한다. down은 DB·Caddy CA named volume을 유지한다. **down -v는 DB와 CA를 삭제한다.** 계정 초기화는 새 DB 볼륨의 첫 실행 때만 적용하므로 .env 암호만 바꿔도 기존 계정의 암호가 바뀌지는 않는다.
 
-호스트에는 기본 `127.0.0.1:8443` HTTPS 포트만 열린다. 앱 8080과 DB 5432는 Docker 내부에서만 접근한다. `HTTPS_PORT`를 변경할 수 있다.
+Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1과 V2가 적용되어 캐시를 유지하고 기록 테이블·시드를 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
 
-## 로컬 HTTPS 인증서 신뢰
+스냅샷은 서울 날짜 기준 최근 56일만 조회·저장하며 매일 03:10에 보관기간 밖 기록을 정리한다. 삭제 기준은 HISTORY_RETENTION_DAYS 설정을 따른다. 이벤트 멱등성·방문 기록은 별도 기록이며 스냅샷 정리와 혼동하지 않는다.
 
-Caddy는 `localhost`에 `tls internal` 인증서를 발급한다. 로컬 CA는 호스트나 Android에서 자동으로 신뢰되지 않으므로 구동 후 공개 루트 인증서를 복사한다.
+로컬 HTTPS는 Caddy tls internal로 발급한다. 공개 루트 CA를 복사하고 요청별로 신뢰할 수 있다.
 
 ```powershell
 docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./local-ca.crt
 curl.exe --cacert ./local-ca.crt https://localhost:8443/actuator/health
-curl.exe --cacert ./local-ca.crt 'https://localhost:8443/api/v1/stations?lat=37.5500&lng=127.1400'
+curl.exe --cacert ./local-ca.crt https://localhost:8443/v3/api-docs
 ```
 
-이 방법은 해당 요청에서만 이 CA를 신뢰한다. Windows 브라우저에서도 사용하려면 인증서가 이 로컬 Caddy의 CA인지 확인한 뒤 현재 사용자 루트 저장소에 등록할 수 있다.
-
-Windows의 Schannel 기반 `curl.exe`는 로컬 CA의 폐기 목록이 없어서 `revocation status is unknown` 오류를 낼 수 있다. 이 경우 Python 3의 표준 TLS 검증으로 CA와 호스트 이름을 확인할 수 있다. 저장소 루트에서 실행한다.
-
-```python
-import ssl
-import urllib.request
-
-context = ssl.create_default_context(cafile="local-ca.crt")
-with urllib.request.urlopen("https://localhost:8443/actuator/health", context=context, timeout=10) as response:
-    print(response.status, response.read().decode())
-```
-
-Windows 브라우저 신뢰 등록 명령:
+브라우저에서도 사용할 때는 이 로컬 Caddy의 CA인지 확인한 뒤 현재 사용자 저장소에 등록할 수 있다. 사용 후 certmgr.msc에서 해당 인증서를 확인해 제거한다. 별도 신뢰 저장소를 사용하는 브라우저에는 공개 CA를 따로 등록한다. 개인키는 복사하지 않는다.
 
 ```powershell
 certutil -user -addstore Root .\local-ca.crt
 ```
 
-사용 종료 시 Windows 인증서 관리자(`certmgr.msc`)에서 해당 Caddy 로컬 CA를 확인해 제거한다. CA 개인키는 복사하거나 공유하지 않는다. 별도 저장소를 쓰는 브라우저에는 공개 CA를 별도로 등록한다. [Caddy 로컬 TLS 문서](https://caddyserver.com/docs/automatic-https#local-https)를 참고한다.
+[Caddy 로컬 TLS](https://caddyserver.com/docs/automatic-https#local-https)는 OS·브라우저·Android에서 자동으로 신뢰되지 않는다. Android Automotive 에뮬레이터의 10.0.2.2와 localhost는 서로 다른 호스트다. 현재 인증서를 다른 IP에 재사용하지 말고 실제 접근 호스트 이름에 맞는 인증서와 [Android 디버그 CA 설정](https://developer.android.com/privacy-and-security/security-config#debug-overrides)을 별도로 준비한다. TLS·호스트 이름 검증은 유지한다.
 
-Android Automotive 에뮬레이터의 `10.0.2.2`는 `localhost`와 다르므로 현재 인증서를 그 주소나 EC2 IP에 그대로 사용할 수 없다. 에뮬레이터·실차 연동은 실제 접근하는 호스트 이름에 맞는 인증서와 [Android 디버그 전용 CA 신뢰 설정](https://developer.android.com/privacy-and-security/security-config#debug-overrides)을 별도로 구성해야 한다. TLS 검증은 유지한다. 도메인·공인 인증서·배포는 이번 범위에 포함하지 않는다.
-
-Swagger는 `https://localhost:8443/swagger-ui.html`, OpenAPI JSON은 `https://localhost:8443/v3/api-docs`다. 브라우저에 CA를 등록하거나 위 `--cacert` 방식으로 접근한다.
-
-## API 계약
-
-### `GET /api/v1/stations`
-
-| Query | 타입 | 규칙 |
-| --- | --- | --- |
-| `lat` | Double | 필수, 유한수, -90~90 |
-| `lng` | Double | 필수, 유한수, -180~180 |
-| `radiusKm` | Double | 기본 3, 0 초과 3 이하 |
-| `keyword` | String? | 선택, 충전소명·주소 검색 |
-| `page` | Int | 기본 0, 0 이상 |
-| `size` | Int | 기본 20, 1~200 |
-
-Haversine 거리로 반경 내 결과를 필터링하고 거리 오름차순·충전소 ID 순으로 정렬한 뒤 페이지를 나눈다. `size`는 DB 응답 개수이며 외부 호출량과 무관하다. 예시는 가상 데이터다.
-
-```json
-{
-  "items": [{
-    "stationId": "ST-001", "name": "예시 충전소", "address": "서울특별시 예시 주소",
-    "lat": 37.551, "lng": 127.141, "distanceMeters": 142,
-    "availableCount": 1, "totalValidCount": 2,
-    "chargerTypes": ["AC_SLOW", "DC_COMBO"], "maxOutputKw": 100.0,
-    "visitCount": null, "statusObservedAt": "2026-11-11T20:00:00+09:00"
-  }],
-  "page": 0, "size": 20, "hasNext": false,
-  "fetchedAt": "2026-11-11T20:01:00+09:00"
-}
-```
-
-### `GET /api/v1/stations/{stationId}`
-
-`stationId`는 환경공단의 실제 문자열 `statId`다. 충전기 ID의 앞자리 0을 보존한다.
-
-```json
-{
-  "stationId": "ST-001", "name": "예시 충전소", "address": "서울특별시 예시 주소",
-  "availableCount": 1, "totalValidCount": 2,
-  "chargers": [{
-    "chargerId": "01", "connectorType": "DC_COMBO", "connectorTypes": ["DC_COMBO"],
-    "chgerType": "04", "outputKw": 100.0, "status": "AVAILABLE", "stat": "2",
-    "statusUpdatedAt": "2026-11-11T20:00:00+09:00"
-  }, {
-    "chargerId": "02", "connectorType": "AC_SLOW", "connectorTypes": ["AC_SLOW"],
-    "chgerType": "02", "outputKw": null, "status": "CHARGING", "stat": "3",
-    "statusUpdatedAt": "2026-11-11T19:59:00+09:00"
-  }],
-  "statusObservedAt": "2026-11-11T20:00:00+09:00"
-}
-```
-
-단일 `connectorType`은 기존 필드를 유지하며 복합 규격은 `+`로 연결하고 `connectorTypes`에 전체 유형을 제공한다. `chgerType`·`stat`은 원본 코드다. 상세에는 위치 `lat`·`lng`와 충전기별 `statusObservedAt`도 포함한다. 미제공 출력과 방문 횟수는 `null`이다. 삭제되거나 유효하지 않은 충전기는 총 유효 수·가용 수에서 제외한다. 상태 `2`만 가용 수로 계산한다.
-
-| stat | status |
-| --- | --- |
-| 0, 그 외 | UNKNOWN |
-| 1 | COMMUNICATION_ERROR |
-| 2 | AVAILABLE |
-| 3 | CHARGING |
-| 4 | STOPPED |
-| 5 | MAINTENANCE |
-| 6 | RESERVED |
-| 9 | UNCONFIRMED |
-
-연결 규격은 `01` CHAdeMO, `02` AC 완속, `03` CHAdeMO+AC 3상, `04` DC 콤보, `05` CHAdeMO+DC 콤보, `06` 세 규격 복합, `07` AC 3상으로 정규화한다. 다른 규격은 `UNKNOWN`과 원본 코드를 함께 제공한다.
-
-`statusUpdatedAt`은 원천 상태 변경 시각이고 `statusObservedAt`은 서버의 상태 관측 시각이다. 충전소는 유효 충전기의 가장 오래된 관측 시각을 반환한다. 시각 미제공은 `null`일 수 있다. 변경분에 없는 충전기의 관측 시각은 새 수집 시각으로 바꾸지 않는다. 오래된 캐시도 마지막 자료와 관측 시각을 반환하므로 실시간 빈자리 보장이 아니다.
-
-오류는 `{ "error": "STATION_NOT_FOUND", "message": "해당 충전소를 찾을 수 없습니다." }` 형태다. 잘못된 입력은 400, 수집 완료 후 없는 충전소는 404, 초기 캐시 없음은 503, 예상하지 못한 오류는 500이며 내부 오류 내용은 노출하지 않는다. 외부 수집 실패 시 기존 캐시 조회는 계속 가능하다.
-
-## 수집 범위와 호출 예산
-
-[한국환경공단 공공데이터](https://www.data.go.kr/data/15076352/openapi.do)의 `getChargerInfo`와 `getChargerStatus` XML을 사용한다. 기본 수집 지역은 **서울(`11`)만**이다. 다른 지역은 `DATA_GO_KR_ZCODES`에 시도 코드를 쉼표로 설정해야 수집된다. 미수집 지역까지 전국 데이터가 제공된다고 해석하면 안 된다.
-
-메타데이터는 최초 수집과 하루 1회, 상태 변경분은 5분 주기를 목표로 수집한다. 스케줄러·페이지 처리 지연으로 변경분을 놓치지 않도록 상태 조회는 허용 범위 내 `period=10`으로 겹쳐 받고 이전 시각의 상태로 되돌리지 않는다. 완전한 메타데이터에서 삭제·누락·무효 항목을 반영하며, 상태 변경분에 없다는 이유로 기존 충전기를 삭제하지 않는다. 완전히 빈 메타데이터 응답은 기존 자료를 보존하고 재시도한다. XML 외부 엔터티·DTD를 차단하고 HTTP 시간 제한을 적용한다. 실패는 제한된 백오프로 다음 주기에 재시도한다. 요청 URL·인증키·원문 오류 응답은 로그에 기록하지 않는다.
-
-지역 설정을 바꿔도 이전에 DB에 수집한 지역 자료는 보존되며 조회될 수 있다. 초기 수집 자체가 유효 자료 없이 실패한 경우 503이고, 수집 성공 뒤 충전기가 모두 삭제된 경우 빈 목록 또는 404다.
-
-개발계정 한도는 하루 1,000회로 가정한다. 기본 일일 예산은 900회이며 100회 여유를 둔다. DB에 일별 호출량과 수집 시각을 저장해 재시작 후에도 예산을 유지하고 DB 잠금으로 중복 수집을 막는다. 페이지마다 실제 요청을 차감하며 지역 수·페이지 수를 포함해 남은 예산을 확인한다. `numOfRows` 기본 9999로 페이지 수를 줄인다.
-
-상태가 지역당 1페이지면 1개 지역은 하루 약 288회, 3개 지역은 약 864회에 메타데이터·실패 요청 비용이 추가된다. 한 지역이라도 여러 페이지면 비용이 늘어난다. 예산이 부족하면 수집 주기를 건너뛸 수 있어 5분 최신성을 보장하지 않는다. 장시간 중단 중 발생한 변경은 일일 메타데이터 수집 때 복구될 수 있다.
-
-| 환경변수 | 기본값 | 용도 |
-| --- | --- | --- |
-| `DATA_GO_KR_ENABLED` | true | 정기 수집 사용 여부 |
-| `DATA_GO_KR_ZCODES` | 11 | 수집할 시도 코드 |
-| `DATA_GO_KR_NUM_OF_ROWS` | 9999 | 외부 API 페이지 크기, 10~9999 |
-| `DATA_GO_KR_DAILY_BUDGET` | 900 | 하루 최대 호출 예산, 최대 900 |
-| `DATA_GO_KR_METADATA_BUDGET` | 100 | 메타데이터에 사용할 일일 예산 |
-
-예산은 이 앱이 같은 DB로 실행한 요청 기준이다. 같은 키를 다른 앱에서도 쓰면 전체 사용량을 따로 고려해야 한다. DB의 예산 기록을 지워도 상위 API의 실제 일일 한도는 초기화되지 않는다.
-
-## 테스트·CI·자동 커밋
-
-JDK 21에서 서버 디렉터리의 Gradle Wrapper를 사용한다. PowerShell에서는 `-D` 인자를 따옴표로 감싼다.
+JDK 21 테스트·패키징:
 
 ```powershell
 cd altercharger-server
@@ -162,6 +661,8 @@ cd altercharger-server
 .\gradlew.bat bootJar --no-daemon -x test
 ```
 
-Linux/macOS에서는 `./gradlew`를 사용한다. 테스트는 XML fixture 파싱·XXE 차단, 상태 집계와 거리 검색, 컨트롤러 입력 및 오류 계약을 검사한다. 실제 환경공단 호출·API 키·PostgreSQL·AWS 자격증명 없이 실행된다. `ci` 프로필에서는 수집이 꺼진다.
+Linux/macOS에서는 ./gradlew를 사용한다. ci 프로필과 가짜 XML·시드로 실제 환경공단 호출·키·AWS 자격증명 없이 검증한다. CI는 main의 push·pull_request에서 테스트·JAR 패키징만 수행한다. Swagger 실제 생성과 정확한 8개 업무 operation은 로컬 스모크에서 확인한다. 작업하는 Codex의 한국어 Conventional Commits 규칙은 [AGENTS.md](AGENTS.md)에 둔다.
 
-`.github/workflows/ci.yml`은 `main`의 push·pull_request에서 Java 21 설정과 Gradle 캐시 후 테스트·실행 JAR 패키징만 수행한다. [AGENTS.md](AGENTS.md)에 따라 작업하는 Codex가 검증한 변경을 한국어 Conventional Commits로 직접 커밋한다.
+## 배포 상태
+
+현재 AWS URL·배포·CD는 설정하지 않았다. 배포 도메인과 CD 세부 설정은 별도 `CODEX_AWS_EC2_CD_SETUP.md` 지시서의 후속 작업으로 진행하며, 이 문서의 YOUR_DOMAIN은 배포 완료 후 실제 도메인으로 교체한다.
