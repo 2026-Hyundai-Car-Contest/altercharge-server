@@ -62,8 +62,7 @@ public class StationDecisionService {
                 .orElse(null);
         boolean available = chargers.stream().anyMatch(c -> "2".equals(c.rawStatus()) && fresh(c, now, sync));
         var reason = available ? NavigationReason.OK : blockedReason(chargers, now, sync);
-        return new NavigationCheck(stationId, available, reason,
-                chargers.stream().map(c -> status(c.rawStatus())).distinct().toList(), now);
+        return new NavigationCheck(stationId, available, reason, now);
     }
 
     private NavigationReason blockedReason(List<Charger> chargers, OffsetDateTime now, StatusSync sync) {

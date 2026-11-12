@@ -1,9 +1,7 @@
 package com.server.altercharger_server.station;
 
-import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.OffsetDateTime;
-import java.util.List;
 
 public final class StationDecisionResponses {
     private StationDecisionResponses() {}
@@ -34,6 +32,5 @@ public final class StationDecisionResponses {
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "환경공단 원본 statId", example = "ST-001") String stationId,
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "최근 실제 관측 또는 해당 관측과 연결된 유효한 지역 연속 동기화로 상태가 확인된 AVAILABLE 충전기가 하나 이상이면 true. 동기화는 실제 충전기와 직접 통신한 확인이 아님", example = "false") boolean navigationAllowed,
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, allowableValues = {"OK", "STATUS_STALE", "NO_AVAILABLE_CHARGER"}, description = "OK: 최신성 근거가 유효한 AVAILABLE이 하나 이상; STATUS_STALE: 유효한 AVAILABLE이 없고 최신성 근거가 부족한 충전기가 하나 이상; NO_AVAILABLE_CHARGER: 나머지 모든 경우. 유효 충전기 0개도 NO_AVAILABLE_CHARGER이며 원천 상태별 세부 차단 사유는 구분하지 않음") NavigationReason reasonCode,
-            @ArraySchema(arraySchema = @Schema(description = "02와 같은 정규화 상태 목록. 충전기 ID 순서대로 중복 상태를 제거", requiredMode = Schema.RequiredMode.REQUIRED), schema = @Schema(description = "정규화 상태", allowableValues = {"UNKNOWN", "COMMUNICATION_ERROR", "AVAILABLE", "CHARGING", "STOPPED", "MAINTENANCE", "RESERVED", "UNCONFIRMED"})) List<String> latestStatuses,
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "서버가 캐시의 유효기간과 상태를 확인한 시각. 원천 상태 변경 시각과 다름", example = "2026-11-11T01:31:00+09:00") OffsetDateTime checkedAt) {}
 }

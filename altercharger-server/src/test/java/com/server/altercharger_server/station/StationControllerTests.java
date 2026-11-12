@@ -3,6 +3,8 @@ package com.server.altercharger_server.station;
 import com.server.altercharger_server.common.error.ApiErrorAdvice;
 import com.server.altercharger_server.history.VisitService;
 import java.time.Clock;
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,6 +13,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -62,5 +65,25 @@ class StationControllerTests {
         when(store.findById("missing")).thenReturn(Optional.empty());
         mvc.perform(get("/api/v1/stations/missing"))
                 .andExpect(status().isNotFound()).andExpect(jsonPath("$.error").value("STATION_NOT_FOUND"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"2,1,true,OK", "2,16,false,STATUS_STALE", "3,1,false,NO_AVAILABLE_CHARGER"})
+    void navigationResponseContainsOnlyDecisionFields(String rawStatus, int ageMinutes,
+                                                       boolean allowed, String reason) throws Exception {
+        var observedAt = OffsetDateTime.now().minusMinutes(ageMinutes);
+        var charger = new StationStore.Charger("01", "04", 100.0, rawStatus, observedAt, observedAt, false);
+        when(store.hasCollectedData()).thenReturn(true);
+        when(store.findById("A")).thenReturn(Optional.of(new StationStore.Station(
+                "A", "예시 충전소", "서울", 37.55, 127.14, List.of(charger))));
+
+        mvc.perform(get("/api/v1/stations/A/navigation-check"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.*", hasSize(4)))
+                .andExpect(jsonPath("$.stationId").value("A"))
+                .andExpect(jsonPath("$.navigationAllowed").value(allowed))
+                .andExpect(jsonPath("$.reasonCode").value(reason))
+                .andExpect(jsonPath("$.checkedAt").isString())
+                .andExpect(jsonPath("$.latestStatuses").doesNotExist());
     }
 }

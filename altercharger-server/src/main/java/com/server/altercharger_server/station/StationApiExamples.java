@@ -21,10 +21,10 @@ final class StationApiExamples {
             {"station":null,"reasonCode":"NO_STATIONS_IN_RADIUS","fallbackUsed":false,"statusObservedAt":null}
             """;
     static final String NAV_OK = """
-            {"stationId":"ST-001","navigationAllowed":true,"reasonCode":"OK","latestStatuses":["AVAILABLE","CHARGING"],"checkedAt":"2026-11-11T01:31:00+09:00"}
+            {"stationId":"ST-001","navigationAllowed":true,"reasonCode":"OK","checkedAt":"2026-11-11T01:31:00+09:00"}
             """;
     static final String NAV_STALE = """
-            {"stationId":"ST-001","navigationAllowed":false,"reasonCode":"STATUS_STALE","latestStatuses":["AVAILABLE"],"checkedAt":"2026-11-11T02:00:00+09:00"}
+            {"stationId":"ST-001","navigationAllowed":false,"reasonCode":"STATUS_STALE","checkedAt":"2026-11-11T02:00:00+09:00"}
             """;
     static final String BAD_REQUEST = """
             {"error":"INVALID_REQUEST","message":"요청 파라미터의 형식과 필수 값을 확인해 주세요."}

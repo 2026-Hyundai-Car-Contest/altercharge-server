@@ -81,14 +81,13 @@ class StationDecisionServiceTests {
     }
 
     @Test
-    void noValidChargersReturnsNoAvailableChargerWithoutInventingAStatus() {
+    void noValidChargersReturnsNoAvailableCharger() {
         navigationStation(List.of(new Charger("01", "", 100.0, "2", now, now, false)));
 
         var result = service.navigationCheck("A");
 
         assertThat(result.navigationAllowed()).isFalse();
         assertThat(result.reasonCode()).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
-        assertThat(result.latestStatuses()).isEmpty();
     }
 
     @Test
@@ -115,7 +114,6 @@ class StationDecisionServiceTests {
 
         assertThat(result.navigationAllowed()).isTrue();
         assertThat(result.reasonCode()).isEqualTo(NavigationReason.OK);
-        assertThat(result.latestStatuses()).containsExactly("AVAILABLE");
         assertThat(result.checkedAt()).isEqualTo(now);
         assertThat(unchanged.statusObservedAt()).isEqualTo(observed);
         verify(store).findStatusSyncForStation("A");

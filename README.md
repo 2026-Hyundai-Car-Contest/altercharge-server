@@ -336,14 +336,14 @@ Host: 15-164-244-37.sslip.io
 
 상태 유효기간은 `STATION_STATUS_MAX_AGE_MINUTES`(설정 예시 15분)다. 개별 충전기의 `statusObservedAt`이 현재부터 정확히 15분 전까지이면 기존처럼 유효하다. 개별 관측이 그보다 오래됐어도, 신뢰 가능한 전체 정보 기준점 이후 그 지역의 변경분을 빠짐없이 연속 동기화했고 `lastStatusSyncAt`이 유효기간 안이면 저장된 상태를 유효하게 인정한다. 지역 근거를 사용하려면 `syncBaselineAt <= statusObservedAt <= lastStatusSyncAt`도 성립해야 한다. NULL·미래 관측 시각과 초기 기준 상태가 없는 충전기를 지역 성공만으로 AVAILABLE로 추정하지 않는다.
 
-이렇게 유효한 AVAILABLE이 하나라도 있으면 다른 충전기가 오래됐어도 안내를 허용하고 `OK`를 반환한다. 없을 때 유효 충전기 중 최신성을 확인할 수 없는 항목이 하나라도 있으면 `STATUS_STALE`, 나머지는 `NO_AVAILABLE_CHARGER`로 차단한다. 조회 가능한 충전소의 유효 충전기가 0개인 경우도 `NO_AVAILABLE_CHARGER`다. 길 안내 `reasonCode`는 이 세 값만 사용하며, `latestStatuses`와 충전기 `status`의 STOPPED·MAINTENANCE·UNCONFIRMED 등 기존 상태 문자열은 유지한다. 지역의 실패·부분 수집·조회 공백은 최신성 근거를 전진시키지 않는다. 01~03의 `statusObservedAt`은 실제 개별 관측에 기반한 값 그대로이므로 오래된 값이더라도 지역 근거가 유효하면 길 안내 결과는 OK일 수 있다. 길 안내 요청 자체는 환경공단 API를 새로 호출하지 않는다.
+이렇게 유효한 AVAILABLE이 하나라도 있으면 다른 충전기가 오래됐어도 안내를 허용하고 `OK`를 반환한다. 없을 때 유효 충전기 중 최신성을 확인할 수 없는 항목이 하나라도 있으면 `STATUS_STALE`, 나머지는 `NO_AVAILABLE_CHARGER`로 차단한다. 조회 가능한 충전소의 유효 충전기가 0개인 경우도 `NO_AVAILABLE_CHARGER`다. 길 안내 `reasonCode`는 이 세 값만 사용하며, 충전기 `status`의 STOPPED·MAINTENANCE·UNCONFIRMED 등 기존 상태 문자열은 유지한다. 지역의 실패·부분 수집·조회 공백은 최신성 근거를 전진시키지 않는다. 01~03의 `statusObservedAt`은 실제 개별 관측에 기반한 값 그대로이므로 오래된 값이더라도 지역 근거가 유효하면 길 안내 결과는 OK일 수 있다. 길 안내 요청 자체는 환경공단 API를 새로 호출하지 않는다.
 
 길 안내의 충전기 상태와 지역 근거 조회는 `REPEATABLE_READ` 읽기 트랜잭션의 같은 DB 스냅샷을 사용한다. 수집 커밋이 두 조회 사이에 들어와도 이전 AVAILABLE과 이후 동기화 근거를 섞어 허용하지 않는다.
 
 ```json
 {
   "stationId":"ST-001","navigationAllowed":true,"reasonCode":"OK",
-  "latestStatuses":["AVAILABLE","CHARGING"],"checkedAt":"2026-11-11T01:31:00+09:00"
+  "checkedAt":"2026-11-11T01:31:00+09:00"
 }
 ```
 
@@ -352,13 +352,12 @@ Host: 15-164-244-37.sslip.io
 | stationId | string | `String` | 예 | ST-001 | 충전소 ID |
 | navigationAllowed | boolean | `Boolean` | 예 | true | 개별 관측 또는 지역 연속 동기화로 유효한 가용 충전기가 있을 때만 true |
 | reasonCode | string | `String` | 예 | OK | OK / STATUS_STALE / NO_AVAILABLE_CHARGER |
-| latestStatuses | array<string> | `List<String>` | 예 | `["AVAILABLE","CHARGING"]` | 02와 동일한 상태 문자열 목록 |
 | checkedAt | string | `String` | 예 | 위 시각 | 서버 판정 시각. 외부 실시간 조회 시각 아님 |
 
 | HTTP | 상황 | 본문 예시 |
 | --- | --- | --- |
 | 200 | 안내 허용 | 위 정상 JSON |
-| 200 | 정상 차단(예: 오래된 상태) | `{"stationId":"ST-001","navigationAllowed":false,"reasonCode":"STATUS_STALE","latestStatuses":["AVAILABLE"],"checkedAt":"2026-11-11T01:31:00+09:00"}` |
+| 200 | 정상 차단(예: 오래된 상태) | `{"stationId":"ST-001","navigationAllowed":false,"reasonCode":"STATUS_STALE","checkedAt":"2026-11-11T01:31:00+09:00"}` |
 | 404 | 충전소 없음 | `{"error":"STATION_NOT_FOUND","message":"해당 충전소를 찾을 수 없습니다."}` |
 | 503 | 사용할 초기 상태 데이터 없음 | `{"error":"STATION_DATA_UNAVAILABLE","message":"아직 수집된 충전소 데이터가 없습니다. 잠시 후 다시 시도해 주세요."}` |
 | 503 | DB 저장소 연결 불가 | `{"error":"SERVICE_UNAVAILABLE","message":"데이터 저장소에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요."}` |
