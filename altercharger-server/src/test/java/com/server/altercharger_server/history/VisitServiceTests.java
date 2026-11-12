@@ -16,9 +16,9 @@ class VisitServiceTests {
     void verifiedStartUsesNearestIdTieAndKoreanDateWhileUniqueInsertReportsDailyDuplicate() {
         StationStore stations = mock(StationStore.class);
         when(stations.hasCollectedData()).thenReturn(true);
-        when(stations.findAll()).thenReturn(List.of(
+        when(stations.findNearby(37.55, 127.14, 100)).thenReturn(List.of(
                 new StationStore.Station("B", "시연", "시연", 37.55, 127.14, List.of()),
-                new StationStore.Station("outside", "시연", "시연", 37.56, 127.14, List.of()),
+                new StationStore.Station("outside", "시연", "시연", 37.5508, 127.141, List.of()),
                 new StationStore.Station("A", "시연", "시연", 37.55, 127.14, List.of())));
         StationVisitRepository repository = mock(StationVisitRepository.class);
         when(repository.addVerifiedVisit(anyString(), eq("mock-user-001"), eq("A"), eq(LocalDate.of(2026, 11, 12)))).thenReturn(1, 0);
@@ -33,5 +33,6 @@ class VisitServiceTests {
         assertTrue(duplicate.dailyDuplicate());
         verify(repository, times(2)).addVerifiedVisit(anyString(), eq("mock-user-001"), eq("A"), eq(LocalDate.of(2026, 11, 12)));
         assertTrue(visits.realVisitCounts("unknown-user").isEmpty());
+        verify(stations, never()).findAll();
     }
 }

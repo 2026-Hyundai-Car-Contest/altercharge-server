@@ -15,7 +15,7 @@ public class StationMatcher {
 
     public String nearestWithin100Meters(double lat, double lng) {
         if (!stations.hasCollectedData()) return null;
-        return stations.findAll().stream()
+        return stations.findNearby(lat, lng, 100).stream()
                 .filter(station -> Geo.validCoordinates(station.lat(), station.lng()))
                 .map(station -> new Match(station.stationId(), Geo.distanceMeters(lat, lng, station.lat(), station.lng())))
                 .filter(match -> match.distance() <= 100)

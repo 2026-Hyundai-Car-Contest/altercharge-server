@@ -1,5 +1,6 @@
 package com.server.altercharger_server.station;
 
+import com.server.altercharger_server.common.Geo;
 import com.server.altercharger_server.collector.CollectedSnapshot;
 import com.server.altercharger_server.collector.CollectionException;
 import com.server.altercharger_server.collector.EvChargerJsonParser.Item;
@@ -37,6 +38,12 @@ public class StationStore {
 
     public List<Station> findAll() {
         return stations.findActiveWithChargers().stream().map(this::toStation).toList();
+    }
+
+    public List<Station> findNearby(double lat, double lng, double radiusMeters) {
+        var bounds = Geo.boundingBox(lat, lng, radiusMeters);
+        return stations.findActiveWithinBounds(bounds.south(), bounds.north(), bounds.west(), bounds.east(),
+                bounds.wrapsLongitude()).stream().map(this::toStation).toList();
     }
 
     public Optional<Station> findById(String stationId) {

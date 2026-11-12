@@ -33,25 +33,25 @@ class StationDecisionServiceTests {
 
     @Test
     void ranksVisitsThenDistanceButRequiresAnAvailableFastChargerWhenRecommended() {
-        when(store.findAll()).thenReturn(List.of(station("closest", 37.55, "2", 100.0),
+        when(store.findNearby(37.55, 127.14, 3000)).thenReturn(List.of(station("closest", 37.55, "2", 100.0),
                 station("visited", 37.551, "2", 7.0)));
         assertThat(service.recommend(37.55, 127.14, false).station().stationId()).isEqualTo("visited");
         assertThat(service.recommend(37.55, 127.14, true).station().stationId()).isEqualTo("closest");
         var busyFast = new Charger("02", "04", 250.0, "3", now, now, false);
         var onlySlowAvailable = new Station("visited", "예시", "서울", 37.55, 127.14,
                 List.of(charger("2", 7.0, now), busyFast));
-        when(store.findAll()).thenReturn(List.of(onlySlowAvailable));
+        when(store.findNearby(37.55, 127.14, 3000)).thenReturn(List.of(onlySlowAvailable));
         assertThat(service.recommend(37.55, 127.14, true).fallbackUsed()).isTrue();
     }
 
     @Test
     void distinguishesNearestFallbackAndNoStationsWithoutFabricatingUnknownVisits() {
-        when(store.findAll()).thenReturn(List.of(station("busy", 37.55, "4", null)));
+        when(store.findNearby(37.55, 127.14, 3000)).thenReturn(List.of(station("busy", 37.55, "4", null)));
         var fallback = service.recommend(37.55, 127.14, false);
         assertThat(fallback.reasonCode()).isEqualTo(RecommendationReason.NEAREST_FALLBACK);
         assertThat(fallback.station().visitCount()).isNull();
         assertThat(fallback.station().availableCount()).isZero();
-        when(store.findAll()).thenReturn(List.of(station("outside", 38, "2", 100.0)));
+        when(store.findNearby(37.55, 127.14, 3000)).thenReturn(List.of(station("outside", 38, "2", 100.0)));
         var none = service.recommend(37.55, 127.14, false);
         assertThat(none.reasonCode()).isEqualTo(RecommendationReason.NO_STATIONS_IN_RADIUS);
         assertThat(none.station()).isNull();

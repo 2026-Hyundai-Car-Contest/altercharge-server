@@ -1,5 +1,6 @@
 package com.server.altercharger_server.station;
 
+import com.server.altercharger_server.common.Geo;
 import com.server.altercharger_server.history.VisitService;
 import com.server.altercharger_server.station.StationStore.Charger;
 import com.server.altercharger_server.station.StationStore.Station;
@@ -13,6 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class StationQueryServiceTests {
@@ -35,8 +39,8 @@ class StationQueryServiceTests {
         Station station = new Station("A", "강동 충전소", "서울 강동", 37.55, 127.14, chargers);
         when(store.hasCollectedData()).thenReturn(true);
         when(store.findById("A")).thenReturn(Optional.of(station));
-        when(store.findAll()).thenReturn(List.of(
-                new Station("outside", "강동 외곽", "서울 강동", 37.60, 127.14, List.of()),
+        when(store.findNearby(37.55, 127.14, 3000)).thenReturn(List.of(
+                new Station("outside", "강동 외곽", "서울 강동", 37.574, 127.17, List.of()),
                 new Station("B", "강동 두번째", "서울 강동", 37.55, 127.14, List.of()),
                 station));
         VisitService visits = mock(VisitService.class);
@@ -67,5 +71,35 @@ class StationQueryServiceTests {
         var beyondLastPage = service.list(37.55, 127.14, 3, null, Integer.MAX_VALUE, 200);
         assertTrue(beyondLastPage.items().isEmpty());
         assertFalse(beyondLastPage.hasNext());
+        verify(store, times(3)).findNearby(37.55, 127.14, 3000);
+        verify(store, never()).findAll();
+    }
+
+    @Test
+    void databaseBoundsIncludeCircleEdgesAtJejuPolesAndAcrossTheDateLine() {
+        double[][] centers = {{37.55, 127.14}, {33.49, 126.53}, {89.99, 170}, {-89.99, -170},
+                {0, 179.99}, {0, -179.99}, {90, 180}, {-90, -180}};
+        for (double[] center : centers) {
+            var bounds = Geo.boundingBox(center[0], center[1], 3000);
+            for (int bearing = 0; bearing < 360; bearing += 45) {
+                double[] edge = destination(center[0], center[1], bearing, 3000);
+                assertTrue(edge[0] >= bounds.south() && edge[0] <= bounds.north(), "latitude edge must remain a candidate");
+                assertTrue(bounds.wrapsLongitude() ? edge[1] >= bounds.west() || edge[1] <= bounds.east()
+                        : edge[1] >= bounds.west() && edge[1] <= bounds.east(), "longitude edge must remain a candidate");
+            }
+        }
+        var small = Geo.boundingBox(33.49, 126.53, 100);
+        assertTrue(small.north() - small.south() < 0.002);
+        assertTrue(small.east() - small.west() < 0.003);
+    }
+
+    private double[] destination(double lat, double lng, double bearing, double distanceMeters) {
+        double angularDistance = distanceMeters / 6_371_000;
+        double latitude = Math.toRadians(lat), longitude = Math.toRadians(lng), heading = Math.toRadians(bearing);
+        double targetLat = Math.asin(Math.sin(latitude) * Math.cos(angularDistance)
+                + Math.cos(latitude) * Math.sin(angularDistance) * Math.cos(heading));
+        double targetLng = longitude + Math.atan2(Math.sin(heading) * Math.sin(angularDistance) * Math.cos(latitude),
+                Math.cos(angularDistance) - Math.sin(latitude) * Math.sin(targetLat));
+        return new double[]{Math.toDegrees(targetLat), ((Math.toDegrees(targetLng) + 540) % 360) - 180};
     }
 }

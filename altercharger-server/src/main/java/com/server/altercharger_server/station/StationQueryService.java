@@ -57,7 +57,7 @@ public class StationQueryService {
     List<NearbyStation> nearby(double lat, double lng, double radiusKm, String keyword) {
         requireCollectedData();
         String search = keyword == null ? "" : keyword.strip().toLowerCase(Locale.ROOT);
-        return store.findAll().stream()
+        return store.findNearby(lat, lng, radiusKm * 1000).stream()
                 .filter(s -> Geo.validCoordinates(s.lat(), s.lng()))
                 .filter(s -> search.isEmpty() || contains(s.name(), search) || contains(s.address(), search))
                 .map(s -> new NearbyStation(s, Geo.distanceMeters(lat, lng, s.lat(), s.lng())))

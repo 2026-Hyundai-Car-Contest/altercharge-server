@@ -16,6 +16,18 @@ public interface StationRepository extends JpaRepository<StationEntity, String> 
             """)
     List<StationEntity> findActiveWithChargers();
 
+    @Query("""
+            select distinct s from StationEntity s left join fetch s.chargers
+            where s.lat between :south and :north
+              and ((:wrapsLongitude = false and s.lng between :west and :east)
+                or (:wrapsLongitude = true and (s.lng >= :west or s.lng <= :east)))
+              and exists (select c.id from ChargerEntity c where c.station = s and c.deleted = false)
+            order by s.stationId
+            """)
+    List<StationEntity> findActiveWithinBounds(@Param("south") double south, @Param("north") double north,
+                                              @Param("west") double west, @Param("east") double east,
+                                              @Param("wrapsLongitude") boolean wrapsLongitude);
+
     @Query("select distinct s from StationEntity s left join fetch s.chargers where s.stationId = :stationId")
     Optional<StationEntity> findWithChargers(@Param("stationId") String stationId);
 
