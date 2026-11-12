@@ -5,6 +5,7 @@ import com.server.altercharger_server.station.StationDecisionResponses.Navigatio
 import com.server.altercharger_server.station.StationDecisionResponses.RecommendationReason;
 import com.server.altercharger_server.station.StationStore.Charger;
 import com.server.altercharger_server.station.StationStore.Station;
+import com.server.altercharger_server.station.StationStore.StatusSync;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -77,6 +78,111 @@ class StationDecisionServiceTests {
         assertThat(service.navigationCheck("A").navigationAllowed()).isTrue();
         assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.OK);
         assertThat(ChargerRules.connectorTypes("10")).containsExactly("DC_COMBO", "NACS");
+    }
+
+    @Test
+    void continuousRegionalSyncConfirmsUnchangedAvailabilityWithoutChangingActualObservation() {
+        var observed = now.minusMinutes(16);
+        var unchanged = charger("2", 100.0, observed);
+        navigationStation(List.of(unchanged));
+        when(store.findStatusSyncForStation("A"))
+                .thenReturn(Optional.of(new StatusSync(observed, now.minusMinutes(1))));
+
+        var result = service.navigationCheck("A");
+
+        assertThat(result.navigationAllowed()).isTrue();
+        assertThat(result.reasonCode()).isEqualTo(NavigationReason.OK);
+        assertThat(result.latestStatuses()).containsExactly("AVAILABLE");
+        assertThat(result.checkedAt()).isEqualTo(now);
+        assertThat(unchanged.statusObservedAt()).isEqualTo(observed);
+        verify(store).findStatusSyncForStation("A");
+        verify(store, never()).saveStatuses(anyList(), any());
+    }
+
+    @Test
+    void regionalSyncPreservesChargingAndUnknownStatesInsteadOfInventingAvailability() {
+        var observed = now.minusMinutes(20);
+        when(store.findStatusSyncForStation("A"))
+                .thenReturn(Optional.of(new StatusSync(observed, now.minusMinutes(1))));
+
+        navigationStation(List.of(charger("3", 100.0, observed)));
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
+        navigationStation(List.of(charger("0", 100.0, observed)));
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_UNKNOWN);
+    }
+
+    @Test
+    void recentRegionalSyncCannotConfirmAnObservationBeforeItsBaselineOrMissingObservation() {
+        var baseline = now.minusMinutes(20);
+        when(store.findStatusSyncForStation("A"))
+                .thenReturn(Optional.of(new StatusSync(baseline, now.minusMinutes(1))));
+
+        navigationStation(List.of(charger("2", 100.0, baseline.minusNanos(1))));
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+        navigationStation(List.of(charger("2", 100.0, null)));
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+        navigationStation(List.of(charger("2", 100.0, now.plusNanos(1))));
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+    }
+
+    @Test
+    void invalidMissingOrExpiredRegionalEvidenceCannotExtendAnOldObservation() {
+        var observed = now.minusMinutes(20);
+        navigationStation(List.of(charger("2", 100.0, observed)));
+        var invalid = List.of(new StatusSync(null, now), new StatusSync(observed, null),
+                new StatusSync(now, now.minusMinutes(1)), new StatusSync(observed, now.plusNanos(1)),
+                new StatusSync(observed, now.minusMinutes(15).minusNanos(1)));
+        for (var sync : invalid) {
+            when(store.findStatusSyncForStation("A")).thenReturn(Optional.of(sync));
+            assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+        }
+        // A failed/partial collection cannot create a newer trusted sync; a gap invalidates it.
+        when(store.findStatusSyncForStation("A")).thenReturn(Optional.empty());
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+    }
+
+    @Test
+    void includesExactObservationAndSyncAgeBoundariesButExcludesOlderAndFutureEvidence() {
+        navigationStation(List.of(charger("2", 100.0, now.minusMinutes(15))));
+        assertThat(service.navigationCheck("A").navigationAllowed()).isTrue();
+        navigationStation(List.of(charger("2", 100.0, now.minusMinutes(15).minusNanos(1))));
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+
+        var baseline = now.minusMinutes(20);
+        navigationStation(List.of(charger("2", 100.0, baseline)));
+        when(store.findStatusSyncForStation("A"))
+                .thenReturn(Optional.of(new StatusSync(baseline, now.minusMinutes(15))));
+        assertThat(service.navigationCheck("A").navigationAllowed()).isTrue();
+        when(store.findStatusSyncForStation("A"))
+                .thenReturn(Optional.of(new StatusSync(baseline, now.minusMinutes(15).minusNanos(1))));
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+    }
+
+    @Test
+    void regionallyConfirmedAvailableTakesPriorityOverAnotherUnconnectedStaleCharger() {
+        var baseline = now.minusMinutes(20);
+        var disconnected = new Charger("02", "04", 100.0, "4", now, baseline.minusMinutes(1), false);
+        navigationStation(List.of(charger("2", 100.0, baseline), disconnected));
+        when(store.findStatusSyncForStation("A"))
+                .thenReturn(Optional.of(new StatusSync(baseline, now.minusMinutes(1))));
+
+        assertThat(service.navigationCheck("A").navigationAllowed()).isTrue();
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.OK);
+    }
+
+    @Test
+    void recommendationRetainsStoredAvailabilityWhileNavigationRequiresFreshnessEvidence() {
+        var cached = new Station("A", "예시", "서울", 37.55, 127.14,
+                List.of(charger("2", 100.0, now.minusMinutes(20))));
+        when(store.findNearby(37.55, 127.14, 3000)).thenReturn(List.of(cached));
+        when(store.findById("A")).thenReturn(Optional.of(cached));
+
+        assertThat(service.recommend(37.55, 127.14, false).station().availableCount()).isEqualTo(1);
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+    }
+
+    private void navigationStation(List<Charger> chargers) {
+        when(store.findById("A")).thenReturn(Optional.of(new Station("A", "예시", "서울", 37.55, 127.14, chargers)));
     }
 
     private Station station(String id, double lat, String stat, Double output) {

@@ -8,7 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 public interface ChargerRepository extends JpaRepository<ChargerEntity, ChargerId> {
-    @Query("select c from ChargerEntity c where c.id in :ids")
+    @Query("select c from ChargerEntity c join fetch c.station where c.id in :ids")
     List<ChargerEntity> findByIds(@Param("ids") Collection<ChargerId> ids);
 
     @Modifying(flushAutomatically = true, clearAutomatically = true)

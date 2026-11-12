@@ -4,6 +4,7 @@ import com.server.altercharger_server.common.Geo;
 import com.server.altercharger_server.collector.CollectedSnapshot;
 import com.server.altercharger_server.collector.CollectionException;
 import com.server.altercharger_server.collector.EvChargerJsonParser.Item;
+import com.server.altercharger_server.collector.persistence.CollectionStateEntity;
 import com.server.altercharger_server.collector.persistence.CollectionStateRepository;
 import com.server.altercharger_server.station.persistence.ChargerEntity;
 import com.server.altercharger_server.station.persistence.ChargerId;
@@ -24,13 +25,17 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class StationStore {
+    private static final Logger log = LoggerFactory.getLogger(StationStore.class);
     private final StationRepository stations;
     private final ChargerRepository chargers;
     private final CollectionStateRepository collectionStates;
@@ -55,10 +60,30 @@ public class StationStore {
         return collectionStates.existsByTaskAndSucceededAtIsNotNull("metadata");
     }
 
+    public Optional<StatusSync> findStatusSyncForStation(String stationId) {
+        return collectionStates.findRegionForStation(stationId)
+                .filter(CollectionStateEntity::isStatusSyncValid)
+                .filter(state -> state.getSyncBaselineAt() != null && state.getLastStatusSyncAt() != null)
+                .map(state -> new StatusSync(state.getSyncBaselineAt(), state.getLastStatusSyncAt()));
+    }
+
+    /** Persist before network work so a failed/incomplete attempt cannot leave old coverage usable. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void beginStatusSync(Set<String> regions) {
+        regions.forEach(region -> regionState(region).beginStatusSync());
+    }
+
     /** Completed disk pages are validated before any replacement, then applied in one transaction. */
     @Transactional
     public void saveMetadata(CollectedSnapshot snapshot, OffsetDateTime observedAt) {
         applyMetadata(snapshot.regionCodes(), snapshot::forEachBatch, observedAt);
+        for (String region : snapshot.regionCodes()) {
+            var state = regionState(region);
+            if (provenCoverage(snapshot, region)) state.establishStatusBaseline(observedAt);
+            else state.invalidateStatusBaseline();
+            logSync("metadata", region, snapshot.regionCoverage(region),
+                    state.isStatusSyncValid() ? "BASELINE_ESTABLISHED" : "UNPROVEN_PAGES");
+        }
     }
 
     /** Retains the in-process fixture/import contract; production uses the disk-backed overload. */
@@ -66,6 +91,8 @@ public class StationStore {
     public void saveMetadata(Map<String, List<Item>> regions, OffsetDateTime observedAt) {
         applyMetadata(regions.keySet(), action -> regions.forEach((region, items) ->
                 forBatches(items, batch -> action.accept(region, batch))), observedAt);
+        // Fixture/import calls provide no page/window evidence and cannot establish regional trust.
+        regions.keySet().forEach(region -> regionState(region).invalidateStatusBaseline());
     }
 
     private void applyMetadata(Set<String> regions, Batches source, OffsetDateTime observedAt) {
@@ -117,37 +144,127 @@ public class StationStore {
         entityManager.clear();
     }
 
-    /** Status is a change feed; omitted chargers and their observation times remain untouched. */
+    /** Only returned rows change. Regional coverage commits atomically with all delta batches. */
     @Transactional
     public void saveStatuses(CollectedSnapshot snapshot, OffsetDateTime observedAt) {
-        snapshot.forEachBatch((region, items) -> updateStatuses(items, observedAt));
+        Map<String, Boolean> applied = new HashMap<>();
+        var identities = new DeltaIdentities();
+        snapshot.regionCodes().forEach(region -> applied.put(region, true));
+        snapshot.forEachBatch((region, items) -> {
+            var coverage = snapshot.regionCoverage(region);
+            boolean unique = identities.accept(region, items);
+            boolean batchApplied = updateStatuses(items, observedAt, region,
+                    coverage == null ? null : coverage.lastResponseFinishedAt()) && unique;
+            applied.compute(region, (key, previous) -> Boolean.TRUE.equals(previous) && batchApplied);
+        });
+        for (String region : snapshot.regionCodes()) {
+            var state = regionState(region);
+            if (provenCoverage(snapshot, region) && Boolean.TRUE.equals(applied.get(region))) {
+                var coverage = snapshot.regionCoverage(region);
+                // Assume a complete upstream feed and sufficiently aligned clocks. The common window
+                // uses the last response's lower bound and the FIRST request's upper bound, never completion.
+                state.completeStatusSync(coverage.lastResponseFinishedAt().minusMinutes(10),
+                        coverage.firstRequestStartedAt());
+            } else state.invalidateStatusBaseline();
+            logSync("status", region, snapshot.regionCoverage(region),
+                    state.isStatusSyncValid() ? "CONTINUOUS_SYNC" : "UNPROVEN_OR_GAPPED_SYNC");
+        }
         markSucceeded("status", observedAt);
     }
 
     @Transactional
     public void saveStatuses(List<Item> items, OffsetDateTime observedAt) {
-        forBatches(items, batch -> updateStatuses(batch, observedAt));
+        forBatches(items, batch -> updateStatuses(batch, observedAt, null, null));
         markSucceeded("status", observedAt);
     }
 
-    private void updateStatuses(List<Item> items, OffsetDateTime observedAt) {
+    private boolean updateStatuses(List<Item> items, OffsetDateTime observedAt,
+                                   String region, OffsetDateTime responseFinishedAt) {
+        boolean complete = true;
         Set<ChargerId> ids = items.stream().filter(Item::hasIdentity)
                 .map(item -> new ChargerId(item.statId(), item.chgerId())).collect(Collectors.toSet());
-        if (ids.isEmpty()) return;
+        if (ids.isEmpty()) return items.isEmpty();
         Map<ChargerId, ChargerEntity> known = chargers.findByIds(ids).stream()
                 .collect(Collectors.toMap(ChargerEntity::getId, Function.identity()));
         for (Item item : items) {
-            if (!item.hasIdentity()) continue;
+            if (!item.hasIdentity()) {
+                complete = false;
+                continue;
+            }
             ChargerEntity charger = known.get(new ChargerId(item.statId(), item.chgerId()));
-            if (charger == null || !canApplyStatus(charger, item.statUpdDt())) continue;
+            // New chargers need full metadata; no availability is invented for an unknown identity.
+            if (charger == null) continue;
+            if (region != null && !region.equals(charger.getStation().getZcode())) {
+                complete = false;
+                continue;
+            }
+            if (item.statUpdDt() == null || responseFinishedAt != null
+                    && (item.statUpdDt().isAfter(responseFinishedAt)
+                    || charger.getStatusUpdatedAt() != null
+                    && charger.getStatusUpdatedAt().isAfter(responseFinishedAt))) complete = false;
+            if (!canApplyStatus(charger, item.statUpdDt())) {
+                continue;
+            }
             if (item.deleted()) {
+                // Keep the deletion watermark; an older metadata status cannot revive AVAILABLE.
+                applyStatus(charger, "0", item.statUpdDt(), observedAt);
                 charger.setDeleted(true);
             } else if (!charger.isDeleted() && !item.stat().isBlank() && item.stat().length() <= 100) {
                 applyStatus(charger, item.stat(), item.statUpdDt(), observedAt);
-            }
+            } else if (!charger.isDeleted()) complete = false;
         }
         entityManager.flush();
         entityManager.clear();
+        return complete;
+    }
+
+    /** Bounded delta-ID validation, never a list/cache of all stored charger entities. */
+    private static final class DeltaIdentities {
+        private static final int LIMIT = 100_000;
+        private final Set<ChargerId> seen = new HashSet<>();
+        private String region;
+        private boolean exhausted;
+
+        boolean accept(String currentRegion, List<Item> items) {
+            // Snapshot batches for one region are contiguous, so only one region's IDs are retained.
+            if (!currentRegion.equals(region)) {
+                seen.clear();
+                exhausted = false;
+                region = currentRegion;
+            }
+            if (exhausted) return false;
+            for (Item item : items) {
+                if (seen.size() >= LIMIT || !seen.add(new ChargerId(item.statId(), item.chgerId()))) {
+                    exhausted = true;
+                    seen.clear();
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private CollectionStateEntity regionState(String region) {
+        String task = CollectionStateEntity.regionTask(region);
+        return collectionStates.findById(task).orElseGet(() -> {
+            var state = new CollectionStateEntity(task);
+            entityManager.persist(state);
+            return state;
+        });
+    }
+
+    private static boolean provenCoverage(CollectedSnapshot snapshot, String region) {
+        var coverage = snapshot.regionCoverage(region);
+        return coverage != null && coverage.totalKnownAndStable() && coverage.pageCount() > 0
+                && coverage.expectedTotal() >= 0 && coverage.firstRequestStartedAt() != null
+                && coverage.lastResponseFinishedAt() != null
+                && !coverage.lastResponseFinishedAt().isBefore(coverage.firstRequestStartedAt());
+    }
+
+    private static void logSync(String task, String region, CollectedSnapshot.RegionCoverage coverage, String reason) {
+        log.info("Collector sync task={} region={} pages={} expectedTotal={} stage=SYNC_COVERAGE reason={}",
+                task, region, coverage == null ? 0 : coverage.pageCount(),
+                coverage == null ? -1 : coverage.expectedTotal(), reason);
     }
 
     private void validateSnapshot(Set<String> regions, Batches source) {
@@ -212,4 +329,6 @@ public class StationStore {
     public record Station(String stationId, String name, String address, double lat, double lng, List<Charger> chargers) { }
     public record Charger(String chargerId, String rawConnectorType, Double outputKw, String rawStatus,
                           OffsetDateTime statusUpdatedAt, OffsetDateTime statusObservedAt, boolean deleted) { }
+
+    public record StatusSync(OffsetDateTime baselineAt, OffsetDateTime lastStatusSyncAt) { }
 }

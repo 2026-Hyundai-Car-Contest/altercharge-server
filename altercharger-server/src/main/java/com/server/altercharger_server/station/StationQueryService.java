@@ -8,11 +8,13 @@ import com.server.altercharger_server.station.StationResponses.StationDetail;
 import com.server.altercharger_server.station.StationResponses.StationPage;
 import com.server.altercharger_server.station.StationResponses.StationSummary;
 import com.server.altercharger_server.station.StationStore.Station;
+import com.server.altercharger_server.station.StationStore.StatusSync;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,10 @@ public class StationQueryService {
         requireCollectedData();
         return store.findById(id).orElseThrow(() ->
                 new ApiException(HttpStatus.NOT_FOUND, "STATION_NOT_FOUND", "해당 충전소를 찾을 수 없습니다."));
+    }
+
+    Optional<StatusSync> statusSyncForStation(String stationId) {
+        return store.findStatusSyncForStation(stationId);
     }
 
     List<NearbyStation> nearby(double lat, double lng, double radiusKm, String keyword) {

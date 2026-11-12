@@ -4,6 +4,7 @@ import com.server.altercharger_server.history.VisitService;
 import com.server.altercharger_server.station.StationDecisionResponses.*;
 import com.server.altercharger_server.station.StationQueryService.NearbyStation;
 import com.server.altercharger_server.station.StationStore.Charger;
+import com.server.altercharger_server.station.StationStore.StatusSync;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -12,6 +13,8 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import static com.server.altercharger_server.station.ChargerRules.*;
 
 @Service
@@ -49,18 +52,23 @@ public class StationDecisionService {
                 fallback, observedAt(chargers));
     }
 
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public NavigationCheck navigationCheck(String stationId) {
         var chargers = validChargers(stations.requireStation(stationId));
         OffsetDateTime now = OffsetDateTime.now(clock);
-        boolean available = chargers.stream().anyMatch(c -> "2".equals(c.rawStatus()) && fresh(c, now));
-        var reason = available ? NavigationReason.OK : blockedReason(chargers, now);
+        var sync = stations.statusSyncForStation(stationId)
+                .filter(s -> s.baselineAt() != null && recent(s.lastStatusSyncAt(), now)
+                        && !s.baselineAt().isAfter(s.lastStatusSyncAt()))
+                .orElse(null);
+        boolean available = chargers.stream().anyMatch(c -> "2".equals(c.rawStatus()) && fresh(c, now, sync));
+        var reason = available ? NavigationReason.OK : blockedReason(chargers, now, sync);
         return new NavigationCheck(stationId, available, reason,
                 chargers.stream().map(c -> status(c.rawStatus())).distinct().toList(), now);
     }
 
-    private NavigationReason blockedReason(List<Charger> chargers, OffsetDateTime now) {
+    private NavigationReason blockedReason(List<Charger> chargers, OffsetDateTime now, StatusSync sync) {
         if (chargers.isEmpty()) return NavigationReason.STATUS_UNKNOWN;
-        if (chargers.stream().anyMatch(c -> !fresh(c, now))) return NavigationReason.STATUS_STALE;
+        if (chargers.stream().anyMatch(c -> !fresh(c, now, sync))) return NavigationReason.STATUS_STALE;
         var codes = chargers.stream().map(Charger::rawStatus).toList();
         if (codes.contains("4")) return NavigationReason.OUT_OF_SERVICE;
         if (codes.contains("5")) return NavigationReason.MAINTENANCE;
@@ -69,8 +77,16 @@ public class StationDecisionService {
         return NavigationReason.NO_AVAILABLE_CHARGER;
     }
 
-    private boolean fresh(Charger charger, OffsetDateTime now) {
+    private boolean fresh(Charger charger, OffsetDateTime now, StatusSync sync) {
         var at = charger.statusObservedAt();
+        if (at == null || at.isAfter(now)) return false;
+        if (recent(at, now)) return true;
+        // A complete, continuous change feed can confirm an unchanged baseline state;
+        // it never manufactures a per-charger observation or an AVAILABLE status.
+        return sync != null && !at.isBefore(sync.baselineAt()) && !at.isAfter(sync.lastStatusSyncAt());
+    }
+
+    private boolean recent(OffsetDateTime at, OffsetDateTime now) {
         return at != null && !at.isAfter(now) && !at.isBefore(now.minus(statusMaxAge));
     }
 

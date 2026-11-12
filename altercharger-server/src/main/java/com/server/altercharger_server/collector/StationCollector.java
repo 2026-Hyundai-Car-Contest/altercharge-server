@@ -106,31 +106,35 @@ public class StationCollector {
         if (state == null || state.retryAfter() != null && now.isBefore(state.retryAfter())
                 || state.succeededAt() != null && now.isBefore(state.succeededAt().plus(interval))) return;
         Progress progress = new Progress();
-        try (var snapshot = new CollectedSnapshot()) {
-            ensureBudget(task, zcodes.size());
-            for (int regionIndex = 0; regionIndex < zcodes.size(); regionIndex++) {
-                String zcode = zcodes.get(regionIndex);
-                progress.region = zcode;
-                progress.page = 0;
-                progress.received = 0;
-                progress.stage = Stage.PREPARE_SNAPSHOT;
-                try (var writer = snapshot.openRegion(zcode)) {
-                    downloadRegion(task, zcode, zcodes.size() - regionIndex - 1, writer, progress);
+        try {
+            // Commit this before HTTP/DB work so an incomplete attempt cannot retain a valid regional chain.
+            if (task.equals("status")) store.beginStatusSync(Set.copyOf(zcodes));
+            try (var snapshot = new CollectedSnapshot()) {
+                ensureBudget(task, zcodes.size());
+                for (int regionIndex = 0; regionIndex < zcodes.size(); regionIndex++) {
+                    String zcode = zcodes.get(regionIndex);
+                    progress.region = zcode;
+                    progress.page = 0;
+                    progress.received = 0;
+                    progress.stage = Stage.PREPARE_SNAPSHOT;
+                    try (var writer = snapshot.openRegion(zcode)) {
+                        downloadRegion(task, zcode, zcodes.size() - regionIndex - 1, writer, progress);
+                    }
                 }
+                // Earlier pages must not appear newly observed merely because a long download finished.
+                OffsetDateTime observedAt = now;
+                progress.stage = Stage.APPLY_SNAPSHOT;
+                progress.region = "ALL";
+                progress.page = 0;
+                progress.received = snapshot.itemCount();
+                if (task.equals("metadata")) {
+                    store.saveMetadata(snapshot, observedAt);
+                } else {
+                    store.saveStatuses(snapshot, observedAt);
+                }
+                log.info("Collector {} completed: regions={}, items={}, callsToday={}/{}", task, zcodes.size(),
+                        snapshot.itemCount(), usage().calls(), dailyBudget);
             }
-            // Earlier pages must not appear newly observed merely because a long download finished.
-            OffsetDateTime observedAt = now;
-            progress.stage = Stage.APPLY_SNAPSHOT;
-            progress.region = "ALL";
-            progress.page = 0;
-            progress.received = snapshot.itemCount();
-            if (task.equals("metadata")) {
-                store.saveMetadata(snapshot, observedAt);
-            } else {
-                store.saveStatuses(snapshot, observedAt);
-            }
-            log.info("Collector {} completed: regions={}, items={}, callsToday={}/{}", task, zcodes.size(),
-                    snapshot.itemCount(), usage().calls(), dailyBudget);
         } catch (Exception ex) {
             int failures = Math.min(state.failures() + 1, 10);
             OffsetDateTime retryAfter = ex instanceof BudgetExhausted
@@ -150,6 +154,9 @@ public class StationCollector {
         int page = 1;
         int capacity = 0;
         int expectedTotal = -1;
+        boolean totalKnownAndStable = true;
+        OffsetDateTime firstRequestStartedAt = null;
+        OffsetDateTime lastResponseFinishedAt = null;
         int pageLimit = task.equals("metadata") ? metadataBudget : dailyBudget;
         progress.region = zcode;
         progress.received = 0;
@@ -162,7 +169,10 @@ public class StationCollector {
             progress.stage = Stage.FETCH_PAGE;
             if (page > pageLimit) throw new CollectionException(Reason.PAGE_LIMIT_REACHED);
             reserveCall(task);
+            OffsetDateTime requestStartedAt = now();
+            if (firstRequestStartedAt == null) firstRequestStartedAt = requestStartedAt;
             var result = client.fetch(task, serviceKey, zcode, page, rows);
+            lastResponseFinishedAt = now();
             progress.returned = result.items().size();
             progress.reportedRows = result.numOfRows();
             progress.reportedTotal = result.totalCount();
@@ -170,6 +180,10 @@ public class StationCollector {
             if (result.pageNo() != 0 && result.pageNo() != page) {
                 throw new CollectionException(Reason.PAGE_NUMBER_MISMATCH);
             }
+            // Keep usable row deltas when optional pagination fields are absent, without certifying coverage.
+            totalKnownAndStable &= result.pageNo() == page && result.totalCount() >= 0
+                    && (progress.returned == 0 || result.numOfRows() > 0)
+                    && (expectedTotal < 0 || expectedTotal == result.totalCount());
             if (result.totalCount() >= 0) {
                 if (task.equals("metadata") && expectedTotal >= 0 && expectedTotal != result.totalCount()) {
                     throw new CollectionException(Reason.METADATA_TOTAL_CHANGED);
@@ -205,7 +219,12 @@ public class StationCollector {
         if (task.equals("metadata") && expectedTotal >= 0 && writer.itemCount() != expectedTotal) {
             throw new CollectionException(Reason.ITEM_COUNT_MISMATCH);
         }
-        log.info("Collector {} region {} downloaded {} pages", task, zcode, page);
+        boolean verifiedPagination = totalKnownAndStable && writer.itemCount() == expectedTotal;
+        writer.completeCoverage(new CollectedSnapshot.RegionCoverage(firstRequestStartedAt, lastResponseFinishedAt,
+                page, expectedTotal, verifiedPagination));
+        log.info("Collector {} region {} downloaded {} pages: received={}, expectedTotal={}, reason={}",
+                task, zcode, page, writer.itemCount(), expectedTotal,
+                verifiedPagination ? "PAGINATION_CONFIRMED" : "PAGINATION_UNCERTAIN");
     }
 
     private void ensureBudget(String task, long needed) {
@@ -236,7 +255,7 @@ public class StationCollector {
         }
     }
 
-    private static OffsetDateTime now() {
+    OffsetDateTime now() {
         return OffsetDateTime.now(SEOUL);
     }
 

@@ -45,6 +45,14 @@ public final class CollectedSnapshot implements AutoCloseable {
 
     public Set<String> regionCodes() { return Set.copyOf(regions.keySet()); }
     public int itemCount() { return regions.values().stream().mapToInt(region -> region.count).sum(); }
+    public RegionCoverage regionCoverage(String zcode) {
+        Region region = regions.get(zcode);
+        return region == null ? null : region.coverage;
+    }
+
+    /** Local request bounds, not an upstream timestamp or a guarantee about upstream reporting delay. */
+    public record RegionCoverage(OffsetDateTime firstRequestStartedAt, OffsetDateTime lastResponseFinishedAt,
+                                 int pageCount, int expectedTotal, boolean totalKnownAndStable) {}
 
     public void forEachBatch(BiConsumer<String, List<Item>> consumer) {
         for (var entry : regions.entrySet()) {
@@ -99,6 +107,7 @@ public final class CollectedSnapshot implements AutoCloseable {
     private static final class Region {
         private final Path path;
         private int count;
+        private RegionCoverage coverage;
         private Region(Path path) { this.path = path; }
     }
 
@@ -127,6 +136,8 @@ public final class CollectedSnapshot implements AutoCloseable {
         }
 
         public int itemCount() { return region.count; }
+
+        public void completeCoverage(RegionCoverage coverage) { region.coverage = coverage; }
 
         @Override
         public void close() {

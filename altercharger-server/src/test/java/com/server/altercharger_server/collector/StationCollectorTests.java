@@ -2,6 +2,7 @@ package com.server.altercharger_server.collector;
 
 import com.server.altercharger_server.collector.EvChargerJsonParser.Item;
 import com.server.altercharger_server.collector.EvChargerJsonParser.Page;
+import com.server.altercharger_server.collector.CollectedSnapshot.RegionCoverage;
 import com.server.altercharger_server.collector.persistence.CollectorLedger;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.State;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.Usage;
@@ -12,6 +13,7 @@ import java.sql.ResultSet;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.IntStream;
@@ -38,6 +40,7 @@ class StationCollectorTests {
     private final AtomicInteger metadataCalls = new AtomicInteger();
     private final AtomicReference<List<Item>> saved = new AtomicReference<>();
     private final AtomicReference<OffsetDateTime> savedObservedAt = new AtomicReference<>();
+    private final AtomicReference<RegionCoverage> savedCoverage = new AtomicReference<>();
     private String activeTask = "metadata";
 
     @BeforeEach
@@ -90,6 +93,9 @@ class StationCollectorTests {
 
         assertEquals(15, saved.get().size());
         assertEquals(2, calls.get());
+        assertTrue(savedCoverage.get().totalKnownAndStable());
+        assertEquals(2, savedCoverage.get().pageCount());
+        assertEquals(15, savedCoverage.get().expectedTotal());
         assertFalse(savedObservedAt.get().toInstant().isAfter(firstFetchAt.get().toInstant()),
                 "The end of a slow download must not make older pages appear newly observed");
         verify(client, times(2)).fetch(eq(task), anyString(), eq("11"), anyInt(), eq(10));
@@ -120,9 +126,11 @@ class StationCollectorTests {
         verify(ledger, never()).defer(anyString(), any(), anyInt());
     }
 
-    @Test
-    void unknownTotalProbesUntilEmptyEvenAfterAShortPage() {
-        when(client.fetch(eq("metadata"), anyString(), eq("11"), anyInt(), eq(10))).thenAnswer(invocation ->
+    @ParameterizedTest
+    @ValueSource(strings = {"metadata", "status"})
+    void unknownTotalProbesUntilEmptyEvenAfterAShortPageWithoutCertifyingCoverage(String task) {
+        activeTask = task;
+        when(client.fetch(eq(task), anyString(), eq("11"), anyInt(), eq(10))).thenAnswer(invocation ->
                 switch ((int) invocation.getArgument(3)) {
                     case 1 -> page(0, 3, -1, 1, 3);
                     case 2 -> page(3, 1, -1, 2, 1);
@@ -134,6 +142,138 @@ class StationCollectorTests {
 
         assertEquals(4, saved.get().size());
         assertEquals(3, calls.get());
+        assertFalse(savedCoverage.get().totalKnownAndStable());
+        assertEquals(-1, savedCoverage.get().expectedTotal());
+    }
+
+    @Test
+    void emptyKnownStatusFeedStillCarriesVerifiedRegionalCoverage() {
+        activeTask = "status";
+        when(client.fetch(eq("status"), anyString(), eq("11"), eq(1), eq(10)))
+                .thenReturn(page(0, 0, 0, 1, 0));
+
+        collector(100).collectIfDue();
+
+        assertTrue(saved.get().isEmpty());
+        assertTrue(savedCoverage.get().totalKnownAndStable());
+        assertEquals(0, savedCoverage.get().expectedTotal());
+        assertEquals(1, savedCoverage.get().pageCount());
+        var order = inOrder(store, client);
+        order.verify(store).beginStatusSync(Set.of("11"));
+        order.verify(client).fetch(eq("status"), anyString(), eq("11"), eq(1), eq(10));
+        order.verify(store).saveStatuses(any(CollectedSnapshot.class), any(OffsetDateTime.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"metadata", "status"})
+    void missingNumOfRowsOnANonemptyPagePreservesRowsWithoutCertifyingCoverage(String task) {
+        activeTask = task;
+        when(client.fetch(eq(task), anyString(), eq("11"), eq(1), eq(10)))
+                .thenReturn(page(0, 1, 1, 1, 0));
+
+        collector(100).collectIfDue();
+
+        assertEquals(1, saved.get().size());
+        assertEquals(1, savedCoverage.get().expectedTotal());
+        assertFalse(savedCoverage.get().totalKnownAndStable());
+        verify(ledger, never()).defer(anyString(), any(), anyInt());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void statusFeedOver9999ItemsRequiresEveryPageBeforeSaving(boolean failSecondPage) {
+        activeTask = "status";
+        when(client.fetch(eq("status"), anyString(), eq("11"), anyInt(), eq(9999))).thenAnswer(invocation -> {
+            int pageNumber = invocation.getArgument(3);
+            if (pageNumber == 1) return page(0, 9999, 10_000, 1, 9999);
+            if (pageNumber != 2) throw new AssertionError("The complete feed needs exactly two pages");
+            if (failSecondPage) throw new CollectionException(CollectionException.Reason.UPSTREAM_REQUEST_FAILED);
+            return page(9999, 1, 10_000, 2, 1);
+        });
+
+        collector(100, 9999).collectIfDue();
+
+        assertEquals(2, calls.get());
+        verify(store).beginStatusSync(Set.of("11"));
+        if (failSecondPage) {
+            assertNull(saved.get());
+            verify(store, never()).saveStatuses(any(CollectedSnapshot.class), any(OffsetDateTime.class));
+            verify(ledger).defer(eq("status"), any(OffsetDateTime.class), eq(1));
+        } else {
+            assertEquals(10_000, saved.get().size());
+            assertTrue(savedCoverage.get().totalKnownAndStable());
+            assertEquals(2, savedCoverage.get().pageCount());
+            verify(ledger, never()).defer(anyString(), any(), anyInt());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"TOTAL_CHANGED", "TOTAL_MISSING", "PAGE_NUMBER_MISSING"})
+    void uncertainStatusPaginationCanMergeRowsWithoutCertifyingRegionalCoverage(String uncertainty) {
+        activeTask = "status";
+        when(client.fetch(eq("status"), anyString(), eq("11"), anyInt(), eq(10))).thenAnswer(invocation -> {
+            int pageNumber = invocation.getArgument(3);
+            if (pageNumber == 1) return page(0, 10, 15, 1, 10);
+            return switch (uncertainty) {
+                case "TOTAL_CHANGED" -> page(10, 5, 14, 2, 5);
+                case "TOTAL_MISSING" -> page(10, 5, -1, 2, 5);
+                case "PAGE_NUMBER_MISSING" -> page(10, 5, 15, 0, 5);
+                default -> throw new AssertionError(uncertainty);
+            };
+        });
+
+        collector(100).collectIfDue();
+
+        assertEquals(15, saved.get().size());
+        assertFalse(savedCoverage.get().totalKnownAndStable());
+        verify(store).beginStatusSync(Set.of("11"));
+    }
+
+    @Test
+    void slowPagesRetainRequestBoundsInsteadOfClaimingCompletionTimeAsTheObservation() {
+        activeTask = "status";
+        OffsetDateTime start = OffsetDateTime.now();
+        AtomicReference<OffsetDateTime> time = new AtomicReference<>(start);
+        StationCollector collector = spy(collector(100));
+        doAnswer(invocation -> time.get()).when(collector).now();
+        when(client.fetch(eq("status"), anyString(), eq("11"), anyInt(), eq(10))).thenAnswer(invocation -> {
+            int pageNumber = invocation.getArgument(3);
+            time.set(start.plusMinutes(pageNumber == 1 ? 1 : 11));
+            return pageNumber == 1 ? page(0, 10, 15, 1, 10) : page(10, 5, 15, 2, 5);
+        });
+
+        collector.collectIfDue();
+
+        assertEquals(start, savedObservedAt.get());
+        assertEquals(start, savedCoverage.get().firstRequestStartedAt());
+        assertEquals(start.plusMinutes(11), savedCoverage.get().lastResponseFinishedAt());
+        assertTrue(savedCoverage.get().totalKnownAndStable(), "Page completeness does not certify time continuity");
+        assertTrue(savedCoverage.get().lastResponseFinishedAt().minusMinutes(10)
+                .isAfter(savedCoverage.get().firstRequestStartedAt()), "The store must see the empty common time window");
+    }
+
+    @Test
+    void dueStatusAttemptInvalidatesRegionalSyncEvenWhenBudgetIsAlreadyExhausted() {
+        activeTask = "status";
+        calls.set(900);
+
+        collector(100).collectIfDue();
+
+        verify(store).beginStatusSync(Set.of("11"));
+        verifyNoInteractions(client);
+        verify(store, never()).saveStatuses(any(CollectedSnapshot.class), any(OffsetDateTime.class));
+        verify(ledger).defer(eq("status"), any(OffsetDateTime.class), eq(1));
+    }
+
+    @Test
+    void futureRetryDeadlineDoesNotBeginANewStatusAttempt() {
+        activeTask = "status";
+        when(ledger.state("status")).thenReturn(new State(null, OffsetDateTime.now().plusHours(1), 7));
+
+        collector(100).collectIfDue();
+
+        verify(store, never()).beginStatusSync(anySet());
+        verifyNoInteractions(client);
     }
 
     @ParameterizedTest
@@ -202,8 +342,12 @@ class StationCollectorTests {
     }
 
     private StationCollector collector(int metadataBudget) {
+        return collector(metadataBudget, 10);
+    }
+
+    private StationCollector collector(int metadataBudget, int rows) {
         return new StationCollector(dataSource, ledger, store, client, "FIXTURE_ONLY_NOT_A_SERVICE_KEY",
-                "11", 10, 900, metadataBudget, 300, 86400);
+                "11", rows, 900, metadataBudget, 300, 86400);
     }
 
     private void capture(CollectedSnapshot snapshot, OffsetDateTime observedAt) {
@@ -211,6 +355,7 @@ class StationCollectorTests {
         snapshot.forEachBatch((region, batch) -> items.addAll(batch));
         saved.set(List.copyOf(items));
         savedObservedAt.set(observedAt);
+        savedCoverage.set(snapshot.regionCoverage("11"));
     }
 
     private static Page page(int start, int count, int total, int page, int reportedRows) {
