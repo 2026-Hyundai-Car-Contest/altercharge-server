@@ -31,8 +31,8 @@ public class StationDecisionController {
             @ApiResponse(responseCode = "500", description = "예기치 못한 서버 오류", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = StationApiExamples.INTERNAL_ERROR)))
     })
     public Recommendation recommend(
-            @Parameter(description = "현재 위도, 유한수", required = true, example = "37.55", schema = @Schema(minimum = "-90", maximum = "90")) @RequestParam @FiniteNumber(min = -90, max = 90) double lat,
-            @Parameter(description = "현재 경도, 유한수", required = true, example = "127.14", schema = @Schema(minimum = "-180", maximum = "180")) @RequestParam @FiniteNumber(min = -180, max = 180) double lng,
+            @Parameter(description = "현재 위도, 유한수", required = true, example = "37.55", schema = @Schema(type = "number", format = "double", minimum = "-90", maximum = "90")) @RequestParam @FiniteNumber(min = -90, max = 90) double lat,
+            @Parameter(description = "현재 경도, 유한수", required = true, example = "127.14", schema = @Schema(type = "number", format = "double", minimum = "-180", maximum = "180")) @RequestParam @FiniteNumber(min = -180, max = 180) double lng,
             @Parameter(description = "프론트의 충전 권장 판정. true이면 50kW 이상 가용 충전기만 후보", required = true, example = "true") @RequestParam boolean chargeRecommended) {
         return service.recommend(lat, lng, chargeRecommended);
     }

@@ -39,12 +39,12 @@ public class StationController {
             @ApiResponse(responseCode = "500", description = "예기치 못한 서버 오류", content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiError.class), examples = @ExampleObject(value = StationApiExamples.INTERNAL_ERROR)))
     })
     public StationPage list(
-            @Parameter(description = "현재 위도(도). 유한수", required = true, example = "37.55", schema = @Schema(minimum = "-90", maximum = "90")) @RequestParam @FiniteNumber(min = -90, max = 90) double lat,
-            @Parameter(description = "현재 경도(도). 유한수", required = true, example = "127.14", schema = @Schema(minimum = "-180", maximum = "180")) @RequestParam @FiniteNumber(min = -180, max = 180) double lng,
-            @Parameter(description = "반경(km), 0 초과 3 이하. 생략 시 3", example = "3", schema = @Schema(minimum = "0", exclusiveMinimum = true, maximum = "3", defaultValue = "3")) @RequestParam(defaultValue = "3") @FiniteNumber(min = 0, max = 3, minInclusive = false) double radiusKm,
+            @Parameter(description = "현재 위도(도). 유한수", required = true, example = "37.55", schema = @Schema(type = "number", format = "double", minimum = "-90", maximum = "90")) @RequestParam @FiniteNumber(min = -90, max = 90) double lat,
+            @Parameter(description = "현재 경도(도). 유한수", required = true, example = "127.14", schema = @Schema(type = "number", format = "double", minimum = "-180", maximum = "180")) @RequestParam @FiniteNumber(min = -180, max = 180) double lng,
+            @Parameter(description = "반경(km), 0 초과 3 이하. 생략 시 3", example = "3", schema = @Schema(type = "number", format = "double", minimum = "0", exclusiveMinimum = true, maximum = "3", defaultValue = "3")) @RequestParam(defaultValue = "3") @FiniteNumber(min = 0, max = 3, minInclusive = false) double radiusKm,
             @Parameter(description = "충전소명·주소 부분 검색. 생략·빈 값이면 검색 제한 없음", example = "강동") @RequestParam(required = false) String keyword,
-            @Parameter(description = "0부터 시작하는 페이지 번호", example = "0", schema = @Schema(minimum = "0", defaultValue = "0")) @RequestParam(defaultValue = "0") @Min(0) int page,
-            @Parameter(description = "내부 DB 결과의 페이지 크기. 외부 API 호출량과 무관", example = "20", schema = @Schema(minimum = "1", maximum = "200", defaultValue = "20")) @RequestParam(defaultValue = "20") @Min(1) @Max(200) int size) {
+            @Parameter(description = "0부터 시작하는 페이지 번호", example = "0", schema = @Schema(type = "integer", format = "int32", minimum = "0", defaultValue = "0")) @RequestParam(defaultValue = "0") @Min(0) int page,
+            @Parameter(description = "내부 DB 결과의 페이지 크기. 외부 API 호출량과 무관", example = "20", schema = @Schema(type = "integer", format = "int32", minimum = "1", maximum = "200", defaultValue = "20")) @RequestParam(defaultValue = "20") @Min(1) @Max(200) int size) {
         return service.list(lat, lng, radiusKm, keyword, page, size);
     }
 
