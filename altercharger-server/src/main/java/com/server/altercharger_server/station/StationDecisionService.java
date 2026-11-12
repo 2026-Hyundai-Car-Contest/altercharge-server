@@ -67,13 +67,7 @@ public class StationDecisionService {
     }
 
     private NavigationReason blockedReason(List<Charger> chargers, OffsetDateTime now, StatusSync sync) {
-        if (chargers.isEmpty()) return NavigationReason.STATUS_UNKNOWN;
         if (chargers.stream().anyMatch(c -> !fresh(c, now, sync))) return NavigationReason.STATUS_STALE;
-        var codes = chargers.stream().map(Charger::rawStatus).toList();
-        if (codes.contains("4")) return NavigationReason.OUT_OF_SERVICE;
-        if (codes.contains("5")) return NavigationReason.MAINTENANCE;
-        if (codes.contains("1")) return NavigationReason.COMM_ERROR;
-        if (codes.stream().anyMatch(c -> !List.of("2", "3", "6").contains(c))) return NavigationReason.STATUS_UNKNOWN;
         return NavigationReason.NO_AVAILABLE_CHARGER;
     }
 

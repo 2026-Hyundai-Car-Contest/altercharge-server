@@ -313,7 +313,7 @@ class StationStoreSyncTests {
         }
         assertThat(charger.getRawStatus()).isEqualTo("0");
         assertThat(charger.getStatusUpdatedAt()).isEqualTo(baseline.plusMinutes(4));
-        assertThat(navigation("A", 7)).isEqualTo(NavigationReason.STATUS_UNKNOWN);
+        assertThat(navigation("A", 7)).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
     }
 
     @ParameterizedTest

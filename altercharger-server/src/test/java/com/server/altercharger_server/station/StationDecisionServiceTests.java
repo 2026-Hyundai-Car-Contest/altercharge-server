@@ -15,7 +15,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
@@ -60,12 +60,35 @@ class StationDecisionServiceTests {
     }
 
     @ParameterizedTest
-    @CsvSource({"4,OUT_OF_SERVICE", "5,MAINTENANCE", "1,COMM_ERROR", "9,STATUS_UNKNOWN", "0,STATUS_UNKNOWN", "3,NO_AVAILABLE_CHARGER", "6,NO_AVAILABLE_CHARGER"})
-    void blocksNonAvailableStates(String raw, NavigationReason reason) {
+    @ValueSource(strings = {"4", "5", "1", "9", "0", "3", "6", "unexpected"})
+    void freshNonAvailableStatesShareOneReason(String raw) {
         when(store.findById("A")).thenReturn(Optional.of(station("A", 37.55, raw, 100.0)));
         var result = service.navigationCheck("A");
         assertThat(result.navigationAllowed()).isFalse();
-        assertThat(result.reasonCode()).isEqualTo(reason);
+        assertThat(result.reasonCode()).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"4", "5", "1", "9", "0", "3", "6", "unexpected"})
+    void staleNonAvailableStateTakesPriorityOverFreshNonAvailableState(String raw) {
+        var freshBusy = new Charger("02", "04", 100.0, "3", now, now, false);
+        navigationStation(List.of(charger(raw, 100.0, now.minusMinutes(16)), freshBusy));
+
+        var result = service.navigationCheck("A");
+
+        assertThat(result.navigationAllowed()).isFalse();
+        assertThat(result.reasonCode()).isEqualTo(NavigationReason.STATUS_STALE);
+    }
+
+    @Test
+    void noValidChargersReturnsNoAvailableChargerWithoutInventingAStatus() {
+        navigationStation(List.of(new Charger("01", "", 100.0, "2", now, now, false)));
+
+        var result = service.navigationCheck("A");
+
+        assertThat(result.navigationAllowed()).isFalse();
+        assertThat(result.reasonCode()).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
+        assertThat(result.latestStatuses()).isEmpty();
     }
 
     @Test
@@ -108,7 +131,7 @@ class StationDecisionServiceTests {
         navigationStation(List.of(charger("3", 100.0, observed)));
         assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
         navigationStation(List.of(charger("0", 100.0, observed)));
-        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.STATUS_UNKNOWN);
+        assertThat(service.navigationCheck("A").reasonCode()).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
     }
 
     @Test
