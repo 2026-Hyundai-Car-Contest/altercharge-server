@@ -60,6 +60,15 @@ public class StationStore {
         return collectionStates.existsByTaskAndSucceededAtIsNotNull("metadata");
     }
 
+    /** Global cache readiness predates regional coverage; bootstrap it once using a real full response. */
+    public boolean needsStatusBaselineRecovery(Set<String> regions) {
+        var tasks = regions.stream().map(CollectionStateEntity::regionTask).toList();
+        long initialized = collectionStates.findAllById(tasks).stream()
+                .filter(state -> state.getSyncBaselineAt() != null || state.getSucceededAt() != null)
+                .count();
+        return initialized < tasks.size();
+    }
+
     public Optional<StatusSync> findStatusSyncForStation(String stationId) {
         return collectionStates.findRegionForStation(stationId)
                 .filter(CollectionStateEntity::isStatusSyncValid)
@@ -79,6 +88,9 @@ public class StationStore {
         applyMetadata(snapshot.regionCodes(), snapshot::forEachBatch, observedAt);
         for (String region : snapshot.regionCodes()) {
             var state = regionState(region);
+            // A committed full-response attempt is distinct from proof of continuous coverage.
+            // Record even uncertain pagination, so failed proof cannot trigger full downloads every tick.
+            state.succeed(observedAt);
             if (provenCoverage(snapshot, region)) state.establishStatusBaseline(observedAt);
             else state.invalidateStatusBaseline();
             logSync("metadata", region, snapshot.regionCoverage(region),

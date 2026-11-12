@@ -103,8 +103,13 @@ public class StationCollector {
         if (task.equals("status") && !store.hasCollectedData()) return;
         OffsetDateTime now = now();
         State state = ledger.state(task);
-        if (state == null || state.retryAfter() != null && now.isBefore(state.retryAfter())
-                || state.succeededAt() != null && now.isBefore(state.succeededAt().plus(interval))) return;
+        if (state == null || state.retryAfter() != null && now.isBefore(state.retryAfter())) return;
+        if (state.succeededAt() != null && now.isBefore(state.succeededAt().plus(interval))) {
+            // A pre-regional cache needs one real full collection; never manufacture coverage from its old task success.
+            if (!task.equals("metadata") || !store.needsStatusBaselineRecovery(Set.copyOf(zcodes))) return;
+            log.info("Collector recovery task=metadata regions={} stage=CHECK_SCHEDULE reason=INITIAL_BASELINE_RECOVERY",
+                    zcodes.size());
+        }
         Progress progress = new Progress();
         try {
             // Commit this before HTTP/DB work so an incomplete attempt cannot retain a valid regional chain.

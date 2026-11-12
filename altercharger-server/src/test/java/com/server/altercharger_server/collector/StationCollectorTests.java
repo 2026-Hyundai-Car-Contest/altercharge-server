@@ -41,6 +41,7 @@ class StationCollectorTests {
     private final AtomicReference<List<Item>> saved = new AtomicReference<>();
     private final AtomicReference<OffsetDateTime> savedObservedAt = new AtomicReference<>();
     private final AtomicReference<RegionCoverage> savedCoverage = new AtomicReference<>();
+    private final AtomicReference<Set<String>> savedRegions = new AtomicReference<>();
     private String activeTask = "metadata";
 
     @BeforeEach
@@ -341,6 +342,127 @@ class StationCollectorTests {
         verify(ledger).defer(eq("metadata"), any(OffsetDateTime.class), eq(6));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void recentGlobalMetadataOnlyRunsEarlyWhenRegionalBaselineNeedsRecovery(boolean needsRecovery,
+                                                                           CapturedOutput output) {
+        when(ledger.state("metadata")).thenReturn(new State(OffsetDateTime.now().minusHours(1), null, 0));
+        when(store.needsStatusBaselineRecovery(Set.of("11"))).thenReturn(needsRecovery);
+        when(client.fetch(eq("metadata"), anyString(), eq("11"), eq(1), eq(10)))
+                .thenReturn(page(0, 1, 1, 1, 1));
+        StationCollector collector = collector(100);
+
+        collector.collectIfDue();
+
+        verify(store).needsStatusBaselineRecovery(Set.of("11"));
+        if (needsRecovery) {
+            assertEquals(1, saved.get().size());
+            assertTrue(output.getAll().contains("reason=INITIAL_BASELINE_RECOVERY"));
+            // A completed full collection consumes the store's one-time bootstrap opportunity.
+            when(store.needsStatusBaselineRecovery(Set.of("11"))).thenReturn(false);
+            collector.collectIfDue();
+            verify(client, times(1)).fetch(eq("metadata"), anyString(), eq("11"), eq(1), eq(10));
+        } else {
+            assertNull(saved.get());
+            verifyNoInteractions(client);
+            assertFalse(output.getAll().contains("reason=INITIAL_BASELINE_RECOVERY"));
+        }
+    }
+
+    @Test
+    void metadataRetryDeadlineIsCheckedBeforeConsideringInitialBaselineRecovery() {
+        when(ledger.state("metadata")).thenReturn(new State(OffsetDateTime.now().minusHours(1),
+                OffsetDateTime.now().plusMinutes(10), 2));
+
+        collector(100).collectIfDue();
+
+        verify(store, never()).needsStatusBaselineRecovery(anySet());
+        verifyNoInteractions(client);
+        verify(ledger, never()).defer(anyString(), any(), anyInt());
+    }
+
+    @Test
+    void normallyDueMetadataDoesNotNeedAnExtraRecoveryQuery() {
+        when(client.fetch(eq("metadata"), anyString(), eq("11"), eq(1), eq(10)))
+                .thenReturn(page(0, 1, 1, 1, 1));
+
+        collector(100).collectIfDue();
+
+        assertEquals(1, saved.get().size());
+        verify(store, never()).needsStatusBaselineRecovery(anySet());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void initialBaselineRecoveryStillRespectsDailyAndMetadataBudgets(boolean metadataLimit,
+                                                                    CapturedOutput output) {
+        when(ledger.state("metadata")).thenReturn(new State(OffsetDateTime.now().minusHours(1), null, 0));
+        when(store.needsStatusBaselineRecovery(Set.of("11"))).thenReturn(true);
+        calls.set(metadataLimit ? 100 : 900);
+        metadataCalls.set(metadataLimit ? 100 : 0);
+
+        collector(100).collectIfDue();
+
+        assertNull(saved.get());
+        verifyNoInteractions(client);
+        verify(ledger).defer(eq("metadata"), any(OffsetDateTime.class), eq(1));
+        assertTrue(output.getAll().contains("reason=BUDGET_EXHAUSTED"));
+    }
+
+    @Test
+    void initialBaselineRecoveryChecksAndCollectsAllConfiguredRegions() {
+        when(ledger.state("metadata")).thenReturn(new State(OffsetDateTime.now().minusHours(1), null, 0));
+        when(store.needsStatusBaselineRecovery(Set.of("11", "26"))).thenReturn(true);
+        when(client.fetch(eq("metadata"), anyString(), anyString(), eq(1), eq(10)))
+                .thenAnswer(call -> page(call.getArgument(2).equals("11") ? 0 : 1, 1, 1, 1, 1));
+        var collector = new StationCollector(dataSource, ledger, store, client, "FIXTURE_ONLY_NOT_A_SERVICE_KEY",
+                "11,26", 10, 900, 100, 300, 86400);
+
+        collector.collectIfDue();
+
+        verify(store).needsStatusBaselineRecovery(Set.of("11", "26"));
+        assertEquals(Set.of("11", "26"), savedRegions.get());
+        assertEquals(2, saved.get().size());
+        assertEquals(2, calls.get());
+        verify(client).fetch(eq("metadata"), anyString(), eq("11"), eq(1), eq(10));
+        verify(client).fetch(eq("metadata"), anyString(), eq("26"), eq(1), eq(10));
+    }
+
+    @Test
+    void failedInitialBaselineRecoveryOnlyRetriesAfterItsPersistedBackoff() {
+        OffsetDateTime start = OffsetDateTime.now();
+        AtomicReference<OffsetDateTime> time = new AtomicReference<>(start);
+        AtomicReference<State> metadataState = new AtomicReference<>(new State(start.minusHours(1), null, 0));
+        when(ledger.state("metadata")).thenAnswer(call -> metadataState.get());
+        when(ledger.state("status")).thenReturn(new State(start.plusDays(1), null, 0));
+        when(store.needsStatusBaselineRecovery(Set.of("11"))).thenReturn(true);
+        doAnswer(call -> {
+            metadataState.set(new State(start.minusHours(1), call.getArgument(1), call.getArgument(2)));
+            return null;
+        }).when(ledger).defer(eq("metadata"), any(OffsetDateTime.class), anyInt());
+        when(client.fetch(eq("metadata"), anyString(), eq("11"), eq(1), eq(10)))
+                .thenThrow(new CollectionException(CollectionException.Reason.UPSTREAM_REQUEST_FAILED))
+                .thenReturn(page(0, 1, 1, 1, 1));
+        StationCollector collector = spy(collector(100));
+        doAnswer(call -> time.get()).when(collector).now();
+
+        collector.collectIfDue();
+        assertNull(saved.get());
+        assertEquals(start.plusMinutes(5), metadataState.get().retryAfter());
+
+        collector.collectIfDue();
+        assertEquals(1, calls.get());
+        verify(store, times(1)).needsStatusBaselineRecovery(Set.of("11"));
+
+        time.set(metadataState.get().retryAfter().plusNanos(1));
+        collector.collectIfDue();
+
+        assertEquals(1, saved.get().size());
+        assertEquals(2, calls.get(), "Failed HTTP attempts remain charged against the durable budget");
+        verify(store, times(2)).needsStatusBaselineRecovery(Set.of("11"));
+        verify(ledger, times(1)).defer(eq("metadata"), any(OffsetDateTime.class), eq(1));
+    }
+
     private StationCollector collector(int metadataBudget) {
         return collector(metadataBudget, 10);
     }
@@ -356,6 +478,7 @@ class StationCollectorTests {
         saved.set(List.copyOf(items));
         savedObservedAt.set(observedAt);
         savedCoverage.set(snapshot.regionCoverage("11"));
+        savedRegions.set(snapshot.regionCodes());
     }
 
     private static Page page(int start, int count, int total, int page, int reportedRows) {

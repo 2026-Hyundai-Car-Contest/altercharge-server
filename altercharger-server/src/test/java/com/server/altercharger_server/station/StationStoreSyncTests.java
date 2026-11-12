@@ -46,6 +46,12 @@ class StationStoreSyncTests {
         stateRows.put("status", new CollectionStateEntity("status"));
         charger = addStation("A", "11", baseline);
         when(states.findById(anyString())).thenAnswer(call -> Optional.ofNullable(stateRows.get(call.getArgument(0))));
+        when(states.findAllById(any())).thenAnswer(call -> {
+            Iterable<String> ids = call.getArgument(0);
+            var found = new java.util.ArrayList<CollectionStateEntity>();
+            ids.forEach(id -> { if (stateRows.containsKey(id)) found.add(stateRows.get(id)); });
+            return found;
+        });
         when(states.existsByTaskAndSucceededAtIsNotNull("metadata"))
                 .thenAnswer(call -> stateRows.get("metadata").getSucceededAt() != null);
         when(states.findRegionForStation(anyString())).thenAnswer(call -> {
@@ -87,6 +93,47 @@ class StationStoreSyncTests {
         verifyNoInteractions(chargers);
         verify(entityManager, never()).persist(any());
         verify(stations, never()).findActiveWithChargers();
+    }
+
+    @Test
+    void legacyReadyCacheWithoutRegionalBaselineNeedsOneRealFullResponse() {
+        store.saveMetadata(Map.of("11", List.of(item("A", "2", baseline.minusHours(1)))), baseline);
+        assertThat(store.hasCollectedData()).isTrue();
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11"))).isTrue();
+        status("11", 5, List.of());
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11"))).isTrue();
+
+        metadata("A", "11", baseline.plusMinutes(6));
+
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11"))).isFalse();
+        assertThat(region("11").getSucceededAt()).isEqualTo(baseline.plusMinutes(6));
+        assertThat(region("11").getSyncBaselineAt()).isEqualTo(baseline.plusMinutes(6));
+    }
+
+    @Test
+    void completedButUnprovenFullResponseCannotCauseRepeatedEarlyFullDownloads() {
+        try (var snapshot = snapshot("11", List.of(item("A", "2", baseline.minusHours(1))),
+                baseline, baseline.plusSeconds(1), false)) {
+            store.saveMetadata(snapshot, baseline);
+        }
+        assertThat(region("11").getSucceededAt()).isEqualTo(baseline);
+        assertThat(region("11").getSyncBaselineAt()).isNull();
+        assertThat(store.findStatusSyncForStation("A")).isEmpty();
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11"))).isFalse();
+    }
+
+    @Test
+    void recoveryExaminesAllConfiguredRegionsAndDoesNotRepeatAfterASubsequentGap() {
+        metadata("A", "11", baseline);
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11"))).isFalse();
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11", "26"))).isTrue();
+        addStation("B", "26", baseline);
+        metadata("B", "26", baseline);
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11", "26"))).isFalse();
+
+        status("11", 11, List.of());
+        assertThat(region("11").getSyncBaselineAt()).isNull();
+        assertThat(store.needsStatusBaselineRecovery(Set.of("11", "26"))).isFalse();
     }
 
     @ParameterizedTest
