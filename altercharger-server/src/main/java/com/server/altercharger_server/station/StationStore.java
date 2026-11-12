@@ -133,9 +133,13 @@ public class StationStore {
             charger.setRawConnectorType(item.chgerType());
             charger.setOutputKw(item.output() != null && item.output() >= 0 ? item.output() : null);
             charger.setDeleted(false);
+            String rawStatus = item.stat().isBlank() || item.stat().length() > 100 ? "0" : item.stat();
             if (canApplyStatus(charger, item.statUpdDt())) {
-                applyStatus(charger, item.stat().isBlank() || item.stat().length() > 100 ? "0" : item.stat(),
-                        item.statUpdDt(), observedAt);
+                applyStatus(charger, rawStatus, item.statUpdDt(), observedAt);
+            } else if (rawStatus.equals(charger.getRawStatus())) {
+                // A full response actually reconfirmed this state. Keep the newer source watermark,
+                // but connect the real observation to the new baseline; omitted deltas never do this.
+                charger.setStatusObservedAt(observedAt);
             }
             if (newCharger) entityManager.persist(charger);
         }

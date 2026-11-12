@@ -89,6 +89,45 @@ class StationStoreSyncTests {
         verify(stations, never()).findActiveWithChargers();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void fullSnapshotReconfirmsSameAvailableStateWithoutReversingAnOlderOrMissingSourceTime(boolean missingTime) {
+        metadata("A", "11", baseline);
+        var sourceAt = baseline.plusMinutes(4);
+        status("11", 5, List.of(item("A", "2", sourceAt)));
+        var fullAt = baseline.plusMinutes(20);
+        try (var snapshot = snapshot("11", List.of(item("A", "2", missingTime ? null : baseline.minusHours(1))),
+                fullAt, fullAt.plusSeconds(1), true)) {
+            store.saveMetadata(snapshot, fullAt);
+        }
+        for (int minute : List.of(25, 30, 35)) status("11", minute, List.of());
+
+        assertThat(navigation("A", 36)).isEqualTo(NavigationReason.OK);
+        assertThat(charger.getRawStatus()).isEqualTo("2");
+        assertThat(charger.getStatusUpdatedAt()).isEqualTo(sourceAt);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(fullAt);
+        assertThat(region("11").getSyncBaselineAt()).isEqualTo(fullAt);
+        assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline.plusMinutes(35));
+    }
+
+    @Test
+    void olderConflictingFullSnapshotCannotReconfirmTheNewerCachedState() {
+        metadata("A", "11", baseline);
+        var sourceAt = baseline.plusMinutes(4);
+        status("11", 5, List.of(item("A", "2", sourceAt)));
+        var fullAt = baseline.plusMinutes(20);
+        try (var snapshot = snapshot("11", List.of(item("A", "3", baseline.minusHours(1))),
+                fullAt, fullAt.plusSeconds(1), true)) {
+            store.saveMetadata(snapshot, fullAt);
+        }
+        for (int minute : List.of(25, 30, 35)) status("11", minute, List.of());
+
+        assertThat(navigation("A", 36)).isEqualTo(NavigationReason.STATUS_STALE);
+        assertThat(charger.getRawStatus()).isEqualTo("2");
+        assertThat(charger.getStatusUpdatedAt()).isEqualTo(sourceAt);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
+    }
+
     @Test
     void changesOverwriteTheSameRowAndDuplicateOrOlderEventsCannotAddHistoryOrReverseNewerState() {
         metadata("A", "11", baseline);
