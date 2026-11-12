@@ -1,5 +1,6 @@
 package com.server.altercharger_server.collector;
 
+import com.server.altercharger_server.collector.CollectionException.Reason;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -51,13 +52,17 @@ public class EvChargerClient {
             connection.setReadTimeout(20000);
             connection.setInstanceFollowRedirects(false);
             connection.setRequestProperty("Accept", "application/json");
-            if (connection.getResponseCode() != 200) throw new CollectionException("Upstream HTTP failure");
+            if (connection.getResponseCode() != 200) throw new CollectionException(Reason.UPSTREAM_HTTP_ERROR);
             try (var body = connection.getInputStream()) {
-                return parser.parse(body, connection.getContentType());
+                try {
+                    return parser.parse(body, connection.getContentType());
+                } catch (CollectionException ex) {
+                    throw new CollectionException(Reason.UPSTREAM_RESPONSE_INVALID);
+                }
             }
         } catch (IOException | IllegalArgumentException ex) {
             // Network exceptions and URIs can contain the key. Never retain them as causes.
-            throw new CollectionException("Upstream request failed");
+            throw new CollectionException(Reason.UPSTREAM_REQUEST_FAILED);
         } finally {
             if (connection != null) connection.disconnect();
         }

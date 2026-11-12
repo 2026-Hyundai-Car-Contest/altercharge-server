@@ -1,5 +1,6 @@
 package com.server.altercharger_server.collector;
 
+import com.server.altercharger_server.collector.CollectionException.Reason;
 import com.server.altercharger_server.collector.persistence.CollectorLedger;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.State;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.Usage;
@@ -104,15 +105,25 @@ public class StationCollector {
         State state = ledger.state(task);
         if (state == null || state.retryAfter() != null && now.isBefore(state.retryAfter())
                 || state.succeededAt() != null && now.isBefore(state.succeededAt().plus(interval))) return;
+        Progress progress = new Progress();
         try (var snapshot = new CollectedSnapshot()) {
             ensureBudget(task, zcodes.size());
             for (int regionIndex = 0; regionIndex < zcodes.size(); regionIndex++) {
                 String zcode = zcodes.get(regionIndex);
+                progress.region = zcode;
+                progress.page = 0;
+                progress.received = 0;
+                progress.stage = Stage.PREPARE_SNAPSHOT;
                 try (var writer = snapshot.openRegion(zcode)) {
-                    downloadRegion(task, zcode, zcodes.size() - regionIndex - 1, writer);
+                    downloadRegion(task, zcode, zcodes.size() - regionIndex - 1, writer, progress);
                 }
             }
-            OffsetDateTime observedAt = now();
+            // Earlier pages must not appear newly observed merely because a long download finished.
+            OffsetDateTime observedAt = now;
+            progress.stage = Stage.APPLY_SNAPSHOT;
+            progress.region = "ALL";
+            progress.page = 0;
+            progress.received = snapshot.itemCount();
             if (task.equals("metadata")) {
                 store.saveMetadata(snapshot, observedAt);
             } else {
@@ -126,53 +137,78 @@ public class StationCollector {
                     ? LocalDate.now(SEOUL).plusDays(1).atStartOfDay(SEOUL).toOffsetDateTime()
                     : now().plusMinutes(Math.min(360, 5L << (failures - 1)));
             ledger.defer(task, retryAfter, failures);
-            log.warn("Collector {} deferred until {}; existing cache retained ({})", task, retryAfter,
-                    ex.getClass().getSimpleName());
+            Reason reason = ex instanceof CollectionException failure ? failure.reason() : Reason.UNEXPECTED_FAILURE;
+            log.warn("Collector deferred task={} region={} page={} received={} expectedTotal={} reportedTotal={} "
+                            + "returned={} reportedRows={} requestedRows={} stage={} reason={} retryAfter={}",
+                    task, progress.region, progress.page, progress.received, progress.expectedTotal, progress.reportedTotal,
+                    progress.returned, progress.reportedRows, rows, progress.stage, reason, retryAfter);
         }
     }
 
-    private void downloadRegion(String task, String zcode, int remainingRegions, CollectedSnapshot.RegionWriter writer) {
+    private void downloadRegion(String task, String zcode, int remainingRegions,
+                                CollectedSnapshot.RegionWriter writer, Progress progress) {
         int page = 1;
-        int expectedPages = 1;
-        int initialTotal = -1;
-        do {
+        int capacity = 0;
+        int expectedTotal = -1;
+        int pageLimit = task.equals("metadata") ? metadataBudget : dailyBudget;
+        progress.region = zcode;
+        progress.received = 0;
+        progress.expectedTotal = -1;
+        while (true) {
+            progress.page = page;
+            progress.returned = 0;
+            progress.reportedRows = 0;
+            progress.reportedTotal = -1;
+            progress.stage = Stage.FETCH_PAGE;
+            if (page > pageLimit) throw new CollectionException(Reason.PAGE_LIMIT_REACHED);
             reserveCall(task);
             var result = client.fetch(task, serviceKey, zcode, page, rows);
+            progress.returned = result.items().size();
+            progress.reportedRows = result.numOfRows();
+            progress.reportedTotal = result.totalCount();
+            progress.stage = Stage.VALIDATE_PAGE;
             if (result.pageNo() != 0 && result.pageNo() != page) {
-                throw new CollectionException("Upstream returned an unexpected page");
+                throw new CollectionException(Reason.PAGE_NUMBER_MISMATCH);
             }
-            int effectiveRows = result.numOfRows() > 0 ? result.numOfRows() : rows;
             if (result.totalCount() >= 0) {
-                long totalPages = Math.max(1, (result.totalCount() + (long) effectiveRows - 1) / effectiveRows);
-                if (totalPages > dailyBudget) throw new BudgetExhausted();
-                expectedPages = (int) totalPages;
-                if (task.equals("metadata") && initialTotal >= 0 && initialTotal != result.totalCount()) {
-                    throw new CollectionException("Metadata changed during pagination; retrying the full snapshot later");
+                if (task.equals("metadata") && expectedTotal >= 0 && expectedTotal != result.totalCount()) {
+                    throw new CollectionException(Reason.METADATA_TOTAL_CHANGED);
                 }
-                initialTotal = result.totalCount();
-                if (result.items().isEmpty() && result.totalCount() > 0) {
-                    throw new CollectionException("Upstream returned an incomplete page");
-                }
-            } else {
-                // With no totalCount, probe until an empty page. A short page may be a server-side
-                // page-size cap, and must not cause an incomplete metadata snapshot to replace cache.
-                expectedPages = result.items().isEmpty() ? page : page + 1;
+                expectedTotal = result.totalCount();
             }
-            ensureBudget(task, Math.max(0, expectedPages - page) + remainingRegions);
-            if (page == 1) {
-                log.info("Collector {} region {}: total={}, pages={}, rows={}", task, zcode,
-                        result.totalCount(), expectedPages, effectiveRows);
+            progress.expectedTotal = expectedTotal;
+            if (capacity == 0 && progress.returned > 0) {
+                // Only an estimate for quota planning. The first actual page also reveals a server cap.
+                // numOfRows may be the current page's item count, including a short final page.
+                capacity = progress.returned;
             }
+            long received = (long) writer.itemCount() + progress.returned;
+            if (task.equals("metadata") && expectedTotal >= 0 && received > expectedTotal) {
+                throw new CollectionException(Reason.ITEM_COUNT_MISMATCH);
+            }
+            if (progress.returned == 0 && expectedTotal >= 0 && received < expectedTotal) {
+                throw new CollectionException(Reason.EMPTY_PAGE_BEFORE_TOTAL);
+            }
+            boolean complete = expectedTotal >= 0 ? received >= expectedTotal : progress.returned == 0;
+            long remainingPages = complete ? 0 : expectedTotal >= 0
+                    ? (expectedTotal - received + capacity - 1L) / capacity : 1;
+            ensureBudget(task, remainingPages + remainingRegions);
+            progress.stage = Stage.WRITE_SPOOL;
             writer.append(result.items());
+            progress.received = writer.itemCount();
+            log.info("Collector page task={} region={} page={} returned={} received={} expectedTotal={} "
+                            + "reportedRows={} requestedRows={} reason={}", task, zcode, page, progress.returned,
+                    progress.received, expectedTotal, result.numOfRows(), rows, complete ? "REGION_COMPLETE" : "MORE_PAGES");
+            if (complete) break;
             page++;
-        } while (page <= expectedPages);
-        if (task.equals("metadata") && initialTotal >= 0 && writer.itemCount() != initialTotal) {
-            throw new CollectionException("Incomplete metadata snapshot; keeping the previous cache");
         }
-        log.info("Collector {} region {} downloaded {} pages", task, zcode, page - 1);
+        if (task.equals("metadata") && expectedTotal >= 0 && writer.itemCount() != expectedTotal) {
+            throw new CollectionException(Reason.ITEM_COUNT_MISMATCH);
+        }
+        log.info("Collector {} region {} downloaded {} pages", task, zcode, page);
     }
 
-    private void ensureBudget(String task, int needed) {
+    private void ensureBudget(String task, long needed) {
         Usage usage = usage();
         if (usage.calls() + (long) needed > dailyBudget
                 || task.equals("metadata") && usage.metadataCalls() + (long) needed > metadataBudget) {
@@ -206,7 +242,20 @@ public class StationCollector {
 
     private static class BudgetExhausted extends CollectionException {
         BudgetExhausted() {
-            super("Daily call budget exhausted");
+            super(Reason.BUDGET_EXHAUSTED);
         }
+    }
+
+    private enum Stage { PREPARE_SNAPSHOT, FETCH_PAGE, VALIDATE_PAGE, WRITE_SPOOL, APPLY_SNAPSHOT }
+
+    private static final class Progress {
+        private String region = "-";
+        private int page;
+        private int received;
+        private int expectedTotal = -1;
+        private int reportedTotal = -1;
+        private int returned;
+        private int reportedRows;
+        private Stage stage = Stage.PREPARE_SNAPSHOT;
     }
 }
