@@ -127,8 +127,8 @@ Swagger 서버 목록은 상대 경로 `/`를 기본으로 하여 현재 접속�
 | 추천 reasonCode | VISITS_THEN_DISTANCE | 유효 후보를 실제 방문수 내림차순·거리·ID 순으로 선정 |
 | 추천 reasonCode | NEAREST_FALLBACK | 유효 후보가 없어 반경 내 최단거리 충전소 제시 |
 | 추천 reasonCode | NO_STATIONS_IN_RADIUS | 3km 안 충전소 없음. station=null |
-| 길 안내 reasonCode | OK | 유효기간 안의 AVAILABLE 충전기 존재 |
-| 길 안내 reasonCode | STATUS_STALE | 허용 가능한 가용 충전기가 없고 관측 시각 누락·만료 존재 |
+| 길 안내 reasonCode | OK | 최근 직접 관측 또는 신뢰 가능한 지역 연속 동기화로 유효한 AVAILABLE 충전기 존재 |
+| 길 안내 reasonCode | STATUS_STALE | 허용 가능한 가용 충전기가 없고 개별 관측·지역 동기화 근거로 최신성을 확인할 수 없는 충전기 존재 |
 | 길 안내 reasonCode | OUT_OF_SERVICE | 운영 중지 상태 포함 |
 | 길 안내 reasonCode | MAINTENANCE | 점검 상태 포함 |
 | 길 안내 reasonCode | COMM_ERROR | 통신 이상 상태 포함 |
@@ -325,7 +325,7 @@ Host: 15-164-244-37.sslip.io
 
 ## 04. 길 안내 직전 상태 확인
 
-요구사항: `REQ_EX_004`, `REQ_BR_004`, `REQ_BR_005`. 저장된 상태와 관측 시각으로 안내 허용 여부만 판단한다. 경로 생성·목적지 변경은 프론트 Pleos NaviHelper가 담당한다.
+요구사항: `REQ_EX_004`, `REQ_BR_004`, `REQ_BR_005`. 저장된 상태와 개별 관측·지역별 연속 동기화 근거로 안내 허용 여부만 판단한다. 경로 생성·목적지 변경은 프론트 Pleos NaviHelper가 담당한다.
 
 `GET https://15-164-244-37.sslip.io/api/v1/stations/{stationId}/navigation-check`
 
@@ -338,7 +338,11 @@ GET https://15-164-244-37.sslip.io/api/v1/stations/ST-001/navigation-check HTTP/
 Host: 15-164-244-37.sslip.io
 ```
 
-충전기별 관측 시각이 현재부터 `STATION_STATUS_MAX_AGE_MINUTES`(기본 15분) 이내이고 상태가 AVAILABLE이면 다른 충전기가 오래됐어도 허용한다. 오래된 AVAILABLE만으로는 허용하지 않는다. 허용 가능한 가용 충전기가 없으면 **관측시각 누락·미래·만료(STATUS_STALE) → 운영 중지 → 점검 → 통신 이상 → 알 수 없음·미확인 → 충전 중·예약 중** 순으로 대표 차단 사유를 정한다.
+상태 유효기간은 `STATION_STATUS_MAX_AGE_MINUTES`(설정 예시 15분)다. 개별 충전기의 `statusObservedAt`이 현재부터 정확히 15분 전까지이면 기존처럼 유효하다. 개별 관측이 그보다 오래됐어도, 신뢰 가능한 전체 정보 기준점 이후 그 지역의 변경분을 빠짐없이 연속 동기화했고 `lastStatusSyncAt`이 유효기간 안이면 저장된 상태를 유효하게 인정한다. 지역 근거를 사용하려면 `syncBaselineAt <= statusObservedAt <= lastStatusSyncAt`도 성립해야 한다. NULL·미래 관측 시각과 초기 기준 상태가 없는 충전기를 지역 성공만으로 AVAILABLE로 추정하지 않는다.
+
+이렇게 유효한 AVAILABLE이 하나라도 있으면 다른 충전기가 오래됐어도 안내를 허용한다. 그렇지 않으면 **최신성 근거 부족(STATUS_STALE) → 운영 중지 → 점검 → 통신 이상 → 알 수 없음·미확인 → 충전 중·예약 중** 순으로 대표 차단 사유를 정한다. 지역의 실패·부분 수집·조회 공백은 이 근거를 전진시키지 않는다. 01~03의 `statusObservedAt`은 실제 개별 관측에 기반한 값 그대로이므로 오래된 값이더라도 지역 근거가 유효하면 길 안내 결과는 OK일 수 있다. 길 안내 요청 자체는 환경공단 API를 새로 호출하지 않는다.
+
+길 안내의 충전기 상태와 지역 근거 조회는 `REPEATABLE_READ` 읽기 트랜잭션의 같은 DB 스냅샷을 사용한다. 수집 커밋이 두 조회 사이에 들어와도 이전 AVAILABLE과 이후 동기화 근거를 섞어 허용하지 않는다.
 
 ```json
 {
@@ -350,7 +354,7 @@ Host: 15-164-244-37.sslip.io
 | 응답 필드 | JSON | Kotlin | 필수 | 예시 | 설명 |
 | --- | --- | --- | --- | --- | --- |
 | stationId | string | `String` | 예 | ST-001 | 충전소 ID |
-| navigationAllowed | boolean | `Boolean` | 예 | true | 신선한 가용 충전기 존재 시에만 true |
+| navigationAllowed | boolean | `Boolean` | 예 | true | 개별 관측 또는 지역 연속 동기화로 유효한 가용 충전기가 있을 때만 true |
 | reasonCode | string | `String` | 예 | OK | 공통 길 안내 사유표의 7개 값 |
 | latestStatuses | array<string> | `List<String>` | 예 | `["AVAILABLE","CHARGING"]` | 02와 동일한 상태 문자열 목록 |
 | checkedAt | string | `String` | 예 | 위 시각 | 서버 판정 시각. 외부 실시간 조회 시각 아님 |
@@ -594,11 +598,25 @@ COMPLETE가 없으면 스냅샷이 있어도 차량 ID 외의 nullable 항목은
 
 개발계정 하루 한도는 1,000회로 가정하며 앱 예산은 기본 900회로 100회 여유를 둔다. 일별 호출량·성공·재시도 시각을 DB에 저장하고 DB 잠금으로 중복 실행을 막는다. 실제 페이지·지역 수에 따라 요청을 차감하고 다음 페이지의 남은 예산을 검사한다. 지역당 상태 1페이지라면 한 지역은 하루 약 288회, 3개 지역은 약 864회이며 메타데이터·실패 비용이 추가된다. 여러 페이지이면 더 많은 호출이 필요하다.
 
-예산 부족·실패 시 보수적으로 재시도를 미루므로 5분 최신성을 보장하지 않는다. 기존 자료가 있으면 마지막 관측 시각과 함께 제공하고 최초 자료가 없으면 503이다. 장시간 중단 중 발생한 상태 변경은 일일 메타데이터 수집 때 복구될 수 있다. statusObservedAt은 실제 관측 시각, statusUpdatedAt은 원천 변경 시각, fetchedAt·checkedAt은 이번 요청 처리 시각이다. 변경분에 없는 충전기의 관측 시각을 새로 만들지 않는다. 따라서 상태가 오래 유지되어 변경분에 포함되지 않은 충전기도 관측 유효기간이 지나면 길 안내가 차단될 수 있다.
+예산 부족·실패 시 보수적으로 재시도를 미루므로 5분 최신성을 보장하지 않는다. 기존 자료가 있으면 마지막 관측 시각과 함께 제공하고 최초 자료가 없으면 503이다. 장시간 중단 중 발생한 상태 변경은 일일 메타데이터 수집 때 복구될 수 있다. `statusObservedAt`은 해당 충전기를 응답에서 실제 확인한 시각, `statusUpdatedAt`은 원천 상태 변경 시각, `fetchedAt`·`checkedAt`은 이번 요청 처리 시각이다. 목록·추천의 원본 상태 2 집계는 유지하며 길 안내는 여기에 최신성 근거를 추가로 확인한다.
+
+변경분에 나온 충전기는 복합키 `statId + chgerId`의 기존 행을 덮어쓴다. 원천 변경 시각이 더 오래된 이벤트는 현재 상태를 뒤집지 않고, 같은 시각의 중복 이벤트는 기존의 동일 시각 허용 규칙으로 처리하여 행을 추가하지 않는다. 변경분에 없는 충전기의 관측 시각은 갱신하지 않으며 상태 이력·누적 스냅샷 테이블도 만들지 않는다.
+
+삭제 변경분은 원천 삭제 시각과 실제 관측 시각을 보존하고 상태를 0으로 저장한다. 이후 전체 메타데이터에서 존재가 재확인되면 활성 항목으로 돌아갈 수 있지만, 삭제보다 오래된 AVAILABLE 상태가 삭제 시각을 덮어쓰지는 못한다.
+
+지역별 근거는 기존 `collection_state`에 `task=region:11`처럼 지역당 고정 1행으로 저장한다. Flyway V3가 `sync_baseline_at`, `last_status_sync_at`, `status_sync_valid` 컬럼을 추가하며, 기존 전역 metadata/status 성공 기록으로 지역 근거를 자동 생성하지 않는다. 전체 정보의 알려진·일관된 건수와 모든 페이지를 검증해 커밋한 경우에만 `syncBaselineAt`을 전체 수집 시작 시각으로 잡고 `lastStatusSyncAt`을 같은 시각으로 재설정한다.
+
+이후 변경분은 해당 지역의 첫 요청 시작 시각을 커버리지 상한으로 사용한다. 모든 페이지의 전체 건수가 알려져 있고 일관되며 DB 반영까지 완료되어야 한다. 마지막 응답 완료 시각에서 10분을 뺀 값이 이전 `lastStatusSyncAt` 이하이고, 이전 값이 첫 요청 시작 시각 이하일 때만 연속 구간으로 인정한다. 이때 `lastStatusSyncAt`을 첫 요청 시작 시각으로 전진시킨다. 완료 시각으로 최신성을 과장하지 않는다. 정상적인 변경분 0건도 이 조건을 만족하면 지역 행만 갱신하며 7.6만 개별 충전기를 매번 UPDATE하지 않는다.
+
+알려진 충전기의 지역 불일치는 그 행 반영을 거부한다. 원천 시각 NULL·마지막 응답보다 미래인 원천 시각·중복 식별자도 지역의 완전성 근거로 인정하지 않는다. 시각·중복 문제의 개별 행은 기존 원천 시각 비교 규칙으로 병합하되 지역 기준점은 무효화한다. 중복 확인용 식별자 집합은 한 지역씩 최대 100,000개로 제한하며, 중복 또는 상한 초과가 확인되면 집합을 비우고 추가 인증 검사를 중단한다. 이후 변경 행의 배치 병합은 계속하되 지역 동기화는 유효하게 만들지 않는다.
+
+시도 중에는 지역 근거를 잠시 비활성화한다. 실패·중간 페이지 누락이면 성공 시각은 보존하고 비활성 상태를 유지하며, 다음 완전한 조회가 아직 10분 범위를 겹쳐 덮으면 복구할 수 있다. 조회 공백 또는 불명확한 완전성으로 연속성을 입증하지 못하면 기준점을 무효화하며 최근 변경분 한 번의 성공으로 과거 공백을 메우지 않는다. 신뢰 가능한 전체 정보 수집만 기준점을 다시 만든다. 다른 지역의 성공을 빌려 쓰지 않는다. 기존 캐시를 가진 DB도 이 변경 배포만으로 지역 근거가 생기지 않으며 다음 정상 전체 수집과 연속 변경분 조건을 충족해야 한다.
+
+예를 들어 14:00에 실제 AVAILABLE을 확보하고 14:05·14:10·14:15의 해당 지역 변경분이 모두 완전하게 연속 동기화되면, 상태가 계속 같아 개별 관측 시각이 14:00이어도 14:16 길 안내를 허용할 수 있다. 반대로 공백·실패로 지역 근거가 유효하지 않고 개별 관측도 15분을 넘으면 HTTP 200 + STATUS_STALE로 차단한다. `lastStatusSyncAt`은 실제 충전기와 직접 통신한 시각이 아니라 외부 변경분을 동기화한 근거다. 환경공단이 조회 기간의 변경분을 빠짐없이 제공한다는 가정을 사용하며 원천 시계 차이·보고 지연·동적 페이지 정합성을 운영에서 보장한다고 주장하지 않는다.
 
 긴 다운로드가 초기 페이지를 실제보다 신선하게 표시하지 않도록 공통 관측 시각은 수집 시작 시각으로 보수적으로 잡는다. 수집 실패 로그에는 task·region·page·누적 건수·응답 건수·stage·고정된 reason 코드를 남기며 인증키·요청 URL·외부 응답 본문·임의 예외 메시지는 기록하지 않는다. 예를 들어 `EMPTY_PAGE_BEFORE_TOTAL`은 전체 건수에 도달하기 전에 빈 페이지를 받은 경우다.
 
-재시도 시각 `retry_after`와 호출 예산은 DB에 유지된다. 버그 수정 배포나 재시작만으로 기존 재시도 대기가 초기화되지는 않으며, 일반 실패는 최대 6시간, 예산 소진은 다음 서울 날짜까지 기다릴 수 있다. 배포 후에는 `collection_state`의 `succeeded_at`, `retry_after`, `consecutive_failures`와 `Collector metadata ... completed` 로그를 확인한다. health UP은 최초 수집 완료를 뜻하지 않는다.
+재시도 시각 `retry_after`와 호출 예산은 DB에 유지된다. 버그 수정 배포나 재시작만으로 기존 재시도 대기가 초기화되지는 않으며, 일반 실패는 최대 6시간, 예산 소진은 다음 서울 날짜까지 기다릴 수 있다. 배포 후에는 `collection_state`의 `succeeded_at`, `retry_after`, `consecutive_failures`, 지역 행의 동기화 근거와 `Collector ... completed` 로그를 확인한다. `SYNC_COVERAGE` 로그는 트랜잭션 안의 판정 진단이므로 최종 성공은 커밋된 DB 값과 작업 완료 로그로 확인한다. health UP은 최초 수집 완료나 지역 연속 동기화를 뜻하지 않는다.
 
 Mock 이벤트는 영속 저장되지만 실제 방문 집계에 포함하지 않는다. 현재 실제 검증 경로가 없어 일반 요청의 visitCount는 알 수 없으면 null이다. 실제 방문 집계 구조는 검증된 REAL START만 사용자·충전소·서울 날짜 하루 1회로 계산하도록 분리되어 있다. 같은 키를 다른 앱에서도 사용하면 외부 전체 호출량을 따로 고려해야 한다.
 
@@ -662,7 +680,7 @@ docker compose --env-file .env -f compose.yaml down
 
 Windows에서는 `python3` 대신 `python`을 사용할 수 있다. 앱은 PostgreSQL health 이후, Caddy는 앱 health 이후 시작한다. `down`은 DB·Caddy CA named volume을 유지한다. 볼륨 삭제 옵션은 사용하지 않는다. 계정 초기화는 새 DB 볼륨의 첫 실행 때만 적용하므로 `.env` 암호만 바꿔도 기존 계정의 암호가 바뀌지는 않는다. 기존 볼륨이 있다면 기존 DB 비밀번호와 계정명을 유지한다.
 
-Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1과 V2가 적용되어 캐시를 유지하고 기록 테이블·시드를 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
+Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1~V3가 적용되어 기존 캐시를 유지하고 기록 테이블·시드·지역 동기화 컬럼을 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
 
 스냅샷은 서울 날짜 기준 최근 56일만 조회·저장하며 매일 03:10에 보관기간 밖 기록을 정리한다. 삭제 기준은 HISTORY_RETENTION_DAYS 설정을 따른다. 이벤트 멱등성·방문 기록은 별도 기록이며 스냅샷 정리와 혼동하지 않는다.
 
