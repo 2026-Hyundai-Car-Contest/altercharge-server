@@ -129,11 +129,7 @@ Swagger 서버 목록은 상대 경로 `/`를 기본으로 하여 현재 접속�
 | 추천 reasonCode | NO_STATIONS_IN_RADIUS | 3km 안 충전소 없음. station=null |
 | 길 안내 reasonCode | OK | 최근 직접 관측 또는 신뢰 가능한 지역 연속 동기화로 유효한 AVAILABLE 충전기 존재 |
 | 길 안내 reasonCode | STATUS_STALE | 허용 가능한 가용 충전기가 없고 개별 관측·지역 동기화 근거로 최신성을 확인할 수 없는 충전기 존재 |
-| 길 안내 reasonCode | OUT_OF_SERVICE | 운영 중지 상태 포함 |
-| 길 안내 reasonCode | MAINTENANCE | 점검 상태 포함 |
-| 길 안내 reasonCode | COMM_ERROR | 통신 이상 상태 포함 |
-| 길 안내 reasonCode | STATUS_UNKNOWN | 알 수 없거나 미확인 상태 포함 |
-| 길 안내 reasonCode | NO_AVAILABLE_CHARGER | 충전 중·예약 중 등으로 가용 충전기 없음 |
+| 길 안내 reasonCode | NO_AVAILABLE_CHARGER | 모든 유효 충전기의 최신성 근거가 유효하고 AVAILABLE이 없음. 유효 충전기 0개 포함 |
 | eventType | START / COMPLETE | 충전 시작 / 완료. END는 사용하지 않음 |
 | source | MOCK / REAL | 시연 / 검증된 실제 원천. **외부 입력은 MOCK만 허용** |
 
@@ -340,7 +336,7 @@ Host: 15-164-244-37.sslip.io
 
 상태 유효기간은 `STATION_STATUS_MAX_AGE_MINUTES`(설정 예시 15분)다. 개별 충전기의 `statusObservedAt`이 현재부터 정확히 15분 전까지이면 기존처럼 유효하다. 개별 관측이 그보다 오래됐어도, 신뢰 가능한 전체 정보 기준점 이후 그 지역의 변경분을 빠짐없이 연속 동기화했고 `lastStatusSyncAt`이 유효기간 안이면 저장된 상태를 유효하게 인정한다. 지역 근거를 사용하려면 `syncBaselineAt <= statusObservedAt <= lastStatusSyncAt`도 성립해야 한다. NULL·미래 관측 시각과 초기 기준 상태가 없는 충전기를 지역 성공만으로 AVAILABLE로 추정하지 않는다.
 
-이렇게 유효한 AVAILABLE이 하나라도 있으면 다른 충전기가 오래됐어도 안내를 허용한다. 그렇지 않으면 **최신성 근거 부족(STATUS_STALE) → 운영 중지 → 점검 → 통신 이상 → 알 수 없음·미확인 → 충전 중·예약 중** 순으로 대표 차단 사유를 정한다. 지역의 실패·부분 수집·조회 공백은 이 근거를 전진시키지 않는다. 01~03의 `statusObservedAt`은 실제 개별 관측에 기반한 값 그대로이므로 오래된 값이더라도 지역 근거가 유효하면 길 안내 결과는 OK일 수 있다. 길 안내 요청 자체는 환경공단 API를 새로 호출하지 않는다.
+이렇게 유효한 AVAILABLE이 하나라도 있으면 다른 충전기가 오래됐어도 안내를 허용하고 `OK`를 반환한다. 없을 때 유효 충전기 중 최신성을 확인할 수 없는 항목이 하나라도 있으면 `STATUS_STALE`, 나머지는 `NO_AVAILABLE_CHARGER`로 차단한다. 조회 가능한 충전소의 유효 충전기가 0개인 경우도 `NO_AVAILABLE_CHARGER`다. 길 안내 `reasonCode`는 이 세 값만 사용하며, `latestStatuses`와 충전기 `status`의 STOPPED·MAINTENANCE·UNCONFIRMED 등 기존 상태 문자열은 유지한다. 지역의 실패·부분 수집·조회 공백은 최신성 근거를 전진시키지 않는다. 01~03의 `statusObservedAt`은 실제 개별 관측에 기반한 값 그대로이므로 오래된 값이더라도 지역 근거가 유효하면 길 안내 결과는 OK일 수 있다. 길 안내 요청 자체는 환경공단 API를 새로 호출하지 않는다.
 
 길 안내의 충전기 상태와 지역 근거 조회는 `REPEATABLE_READ` 읽기 트랜잭션의 같은 DB 스냅샷을 사용한다. 수집 커밋이 두 조회 사이에 들어와도 이전 AVAILABLE과 이후 동기화 근거를 섞어 허용하지 않는다.
 
@@ -355,7 +351,7 @@ Host: 15-164-244-37.sslip.io
 | --- | --- | --- | --- | --- | --- |
 | stationId | string | `String` | 예 | ST-001 | 충전소 ID |
 | navigationAllowed | boolean | `Boolean` | 예 | true | 개별 관측 또는 지역 연속 동기화로 유효한 가용 충전기가 있을 때만 true |
-| reasonCode | string | `String` | 예 | OK | 공통 길 안내 사유표의 7개 값 |
+| reasonCode | string | `String` | 예 | OK | OK / STATUS_STALE / NO_AVAILABLE_CHARGER |
 | latestStatuses | array<string> | `List<String>` | 예 | `["AVAILABLE","CHARGING"]` | 02와 동일한 상태 문자열 목록 |
 | checkedAt | string | `String` | 예 | 위 시각 | 서버 판정 시각. 외부 실시간 조회 시각 아님 |
 
@@ -612,13 +608,76 @@ COMPLETE가 없으면 스냅샷이 있어도 차량 ID 외의 nullable 항목은
 
 알려진 충전기의 지역 불일치는 그 행 반영을 거부한다. 원천 시각 NULL·마지막 응답보다 미래인 원천 시각·중복 식별자도 지역의 완전성 근거로 인정하지 않는다. 시각·중복 문제의 개별 행은 기존 원천 시각 비교 규칙으로 병합하되 지역 기준점은 무효화한다. 중복 확인용 식별자 집합은 한 지역씩 최대 100,000개로 제한하며, 중복 또는 상한 초과가 확인되면 집합을 비우고 추가 인증 검사를 중단한다. 이후 변경 행의 배치 병합은 계속하되 지역 동기화는 유효하게 만들지 않는다.
 
-시도 중에는 지역 근거를 잠시 비활성화한다. 실패·중간 페이지 누락이면 성공 시각은 보존하고 비활성 상태를 유지하며, 다음 완전한 조회가 아직 10분 범위를 겹쳐 덮으면 복구할 수 있다. 조회 공백 또는 불명확한 완전성으로 연속성을 입증하지 못하면 기준점을 무효화하며 최근 변경분 한 번의 성공으로 과거 공백을 메우지 않는다. 신뢰 가능한 전체 정보 수집만 기준점을 다시 만든다. 다른 지역의 성공을 빌려 쓰지 않는다. 기존 캐시를 가진 DB도 이 변경 배포만으로 지역 근거가 생기지 않으며 다음 정상 전체 수집과 연속 변경분 조건을 충족해야 한다.
+시도 중에는 지역 근거를 잠시 비활성화한다. 실패·중간 페이지 누락이면 성공 시각은 보존하고 비활성 상태를 유지하며, 다음 완전한 조회가 아직 10분 범위를 겹쳐 덮으면 복구할 수 있다. 조회 공백 또는 불명확한 완전성으로 연속성을 입증하지 못하면 기준점을 무효화하며 최근 변경분 한 번의 성공으로 과거 공백을 메우지 않는다. 신뢰 가능한 전체 정보 수집만 기준점을 다시 만든다. 다른 지역의 성공을 빌려 쓰지 않는다.
+
+기존 캐시의 지역 기준점이 처음부터 없는 경우, 해당 지역 행이 없거나 `sync_baseline_at`과 지역 `succeeded_at`이 모두 NULL이면 24시간 주기 전에도 설정한 모든 지역의 전체 메타데이터 수집을 한 번 앞당긴다. `retry_after`와 호출 예산은 그대로 지킨다. 전체 응답을 DB에 처리한 지역의 `succeeded_at`에는 그 수집 시작 시각을 남긴다. 페이지 근거가 불명확해 기준점을 만들지 못해도 이 처리 기록은 남아 재시작·다음 스케줄마다 전체 수집을 반복하지 않는다. HTTP·DB 실패는 처리 기록을 만들지 않으며 기존 재시도 정책을 따른다. 이후 발생한 조회 공백은 자동 조기 전체 수집 대상이 아니며 정기 전체 수집을 기다린다. 기존 캐시의 조회 가능 여부와 지역 최신성은 별개이고, 실제 검증된 전체 수집과 연속 변경분 조건을 충족해야 길 안내에 지역 근거를 쓸 수 있다.
 
 예를 들어 14:00에 실제 AVAILABLE을 확보하고 14:05·14:10·14:15의 해당 지역 변경분이 모두 완전하게 연속 동기화되면, 상태가 계속 같아 개별 관측 시각이 14:00이어도 14:16 길 안내를 허용할 수 있다. 반대로 공백·실패로 지역 근거가 유효하지 않고 개별 관측도 15분을 넘으면 HTTP 200 + STATUS_STALE로 차단한다. `lastStatusSyncAt`은 실제 충전기와 직접 통신한 시각이 아니라 외부 변경분을 동기화한 근거다. 환경공단이 조회 기간의 변경분을 빠짐없이 제공한다는 가정을 사용하며 원천 시계 차이·보고 지연·동적 페이지 정합성을 운영에서 보장한다고 주장하지 않는다.
 
 긴 다운로드가 초기 페이지를 실제보다 신선하게 표시하지 않도록 공통 관측 시각은 수집 시작 시각으로 보수적으로 잡는다. 수집 실패 로그에는 task·region·page·누적 건수·응답 건수·stage·고정된 reason 코드를 남기며 인증키·요청 URL·외부 응답 본문·임의 예외 메시지는 기록하지 않는다. 예를 들어 `EMPTY_PAGE_BEFORE_TOTAL`은 전체 건수에 도달하기 전에 빈 페이지를 받은 경우다.
 
 재시도 시각 `retry_after`와 호출 예산은 DB에 유지된다. 버그 수정 배포나 재시작만으로 기존 재시도 대기가 초기화되지는 않으며, 일반 실패는 최대 6시간, 예산 소진은 다음 서울 날짜까지 기다릴 수 있다. 배포 후에는 `collection_state`의 `succeeded_at`, `retry_after`, `consecutive_failures`, 지역 행의 동기화 근거와 `Collector ... completed` 로그를 확인한다. `SYNC_COVERAGE` 로그는 트랜잭션 안의 판정 진단이므로 최종 성공은 커밋된 DB 값과 작업 완료 로그로 확인한다. health UP은 최초 수집 완료나 지역 연속 동기화를 뜻하지 않는다.
+
+### 운영자가 전체 메타데이터 수집 일정을 앞당길 때
+
+사용자가 운영 서버에서 직접 실행하는 복구 명령이다. 실행 중인 앱의 실제 전체 수집 간격과 DB 포트를 읽고 숫자를 검증한 뒤, 수집기와 같은 advisory lock을 잡아 **전역 metadata의 기존 non-NULL 성공 시각만** 그 간격보다 이전으로 옮긴다. 기존 캐시의 readiness를 유지하며 다음 스케줄에서 `DATA_GO_KR_ZCODES`의 모든 지역을 평소 전체 수집 경로로 처리한다. `retry_after`가 미래이거나 예산이 부족하면 계속 기다리며, 지역 기준점·관측 시각·재시도 횟수·호출량을 직접 바꾸지 않는다. 앱과 수집기가 실행 중이어야 하며 이 명령은 즉시 수집 완료나 STATUS_STALE 해소를 보장하지 않는다.
+
+```bash
+(
+set -eu
+compose_prod() {
+  docker compose --env-file /opt/altercharge/.env \
+    -f /opt/altercharge/current/compose.prod.yaml "$@"
+}
+
+info_refresh_seconds="$(compose_prod exec -T app printenv DATA_GO_KR_INFO_REFRESH_SECONDS)"
+case "$info_refresh_seconds" in
+  ''|*[!0-9]*) printf '%s\n' '전체 수집 간격이 숫자가 아닙니다.' >&2; exit 1 ;;
+esac
+if ! [ "$info_refresh_seconds" -ge 86400 ] || ! [ "$info_refresh_seconds" -le 2147483647 ]; then
+  printf '%s\n' '전체 수집 간격의 범위를 직접 확인해 주세요.' >&2
+  exit 1
+fi
+
+db_url="$(compose_prod exec -T app printenv SPRING_DATASOURCE_URL)"
+db_port="${db_url#jdbc:postgresql://postgres:}"
+db_port="${db_port%%/*}"
+unset db_url
+case "$db_port" in
+  ''|*[!0-9]*) printf '%s\n' 'DB 내부 포트를 확인할 수 없습니다.' >&2; exit 1 ;;
+esac
+if ! [ "$db_port" -ge 1 ] || ! [ "$db_port" -le 65535 ]; then
+  printf '%s\n' 'DB 내부 포트 범위가 올바르지 않습니다.' >&2
+  exit 1
+fi
+
+compose_prod exec -T postgres sh -ceu '
+  exec psql -p "$1" -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -v ON_ERROR_STOP=1 -v refresh_seconds="$2"
+' sh "$db_port" "$info_refresh_seconds" <<'SQL'
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+DO $repair$
+BEGIN
+  IF NOT pg_try_advisory_xact_lock(462932114) THEN
+    RAISE EXCEPTION 'COLLECTOR_BUSY';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM collection_state WHERE task = 'metadata' AND succeeded_at IS NOT NULL) THEN
+    RAISE EXCEPTION 'NO_EXISTING_METADATA_CACHE';
+  END IF;
+END;
+$repair$;
+UPDATE collection_state
+SET succeeded_at = LEAST(succeeded_at,
+    now() - make_interval(secs => :'refresh_seconds'::integer) - interval '1 second')
+WHERE task = 'metadata' AND succeeded_at IS NOT NULL
+RETURNING task, succeeded_at, retry_after, consecutive_failures;
+COMMIT;
+SQL
+)
+```
+
+`COLLECTOR_BUSY`이면 수집 중이므로 기다렸다가 다시 실행한다. DB 값이나 로그에 기준점을 임의로 채우지 않고, 실제 전체 수집 완료 후 지역 `sync_baseline_at`·`last_status_sync_at`·`status_sync_valid`와 작업 완료 로그를 확인한다. 이 복구 예시는 운영 서버에서 자동 실행하지 않는다.
 
 Mock 이벤트는 영속 저장되지만 실제 방문 집계에 포함하지 않는다. 현재 실제 검증 경로가 없어 일반 요청의 visitCount는 알 수 없으면 null이다. 실제 방문 집계 구조는 검증된 REAL START만 사용자·충전소·서울 날짜 하루 1회로 계산하도록 분리되어 있다. 같은 키를 다른 앱에서도 사용하면 외부 전체 호출량을 따로 고려해야 한다.
 
