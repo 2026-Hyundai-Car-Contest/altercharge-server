@@ -35,5 +35,8 @@ jobs:
             altercharger-server/gradle/wrapper/gradle-wrapper.properties
       - name: Run required tests
         run: ./gradlew test --no-daemon -Dspring.profiles.active=ci
+      - name: Verify local startup configuration boundaries
+        working-directory: .
+        run: python3 -m unittest discover -s scripts/tests
       - name: Verify application packaging
         run: ./gradlew bootJar --no-daemon -x test

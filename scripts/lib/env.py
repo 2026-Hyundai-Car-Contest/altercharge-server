@@ -209,6 +209,7 @@ def validate(args):
         if key in values and values[key].lower() not in ("true", "false"):
             raise ConfigurationError(f"{key}는 true 또는 false여야 합니다.")
     print("환경변수 검증을 통과했습니다.")
+    return values
 
 
 def main():
