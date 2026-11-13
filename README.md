@@ -615,7 +615,7 @@ COMPLETE가 없으면 스냅샷이 있어도 차량 ID 외의 nullable 항목은
 
 긴 다운로드가 초기 페이지를 실제보다 신선하게 표시하지 않도록 공통 관측 시각은 수집 시작 시각으로 보수적으로 잡는다. 수집 실패 로그에는 task·region·page·누적 건수·응답 건수·stage·고정된 reason 코드를 남기며 인증키·요청 URL·외부 응답 본문·임의 예외 메시지는 기록하지 않는다. 예를 들어 `EMPTY_PAGE_BEFORE_TOTAL`은 전체 건수에 도달하기 전에 빈 페이지를 받은 경우다.
 
-재시도 시각 `retry_after`와 호출 예산은 DB에 유지된다. 버그 수정 배포나 재시작만으로 기존 재시도 대기가 초기화되지는 않으며, 일반 실패는 최대 6시간, 예산 소진은 다음 서울 날짜까지 기다릴 수 있다. 배포 후에는 `collection_state`의 `succeeded_at`, `retry_after`, `consecutive_failures`, 지역 행의 동기화 근거와 `Collector ... completed` 로그를 확인한다. `SYNC_COVERAGE` 로그는 트랜잭션 안의 판정 진단이므로 최종 성공은 커밋된 DB 값과 작업 완료 로그로 확인한다. health UP은 최초 수집 완료나 지역 연속 동기화를 뜻하지 않는다.
+재시도 시각 `retry_after`와 호출 예산은 DB에 유지된다. 상태 수집 실패는 1분부터, 메타데이터 실패는 5분부터 지수 백오프하며 각각 최대 6시간으로 제한한다. 상태 요청의 타임아웃 뒤 추가로 5분을 기다려 10분 조회 범위를 초과하던 경로를 줄이되 정상 수집 간격과 호출 예산은 유지한다. 버그 수정 배포나 재시작만으로 기존 재시도 대기가 초기화되지는 않으며, 예산 소진은 다음 서울 날짜까지 기다릴 수 있다. 배포 후에는 `collection_state`의 `succeeded_at`, `retry_after`, `consecutive_failures`, 지역 행의 동기화 근거와 `Collector ... completed` 로그를 확인한다. `SYNC_COVERAGE`는 `BASELINE_MISSING`·`SYNC_WINDOW_GAP`·`UNPROVEN_PAGES`·원천 시각/식별자 문제를 고정 원인 코드로 구분한다. 이 로그는 트랜잭션 안의 판정 진단이므로 최종 성공은 커밋된 DB 값과 작업 완료 로그로 확인한다. health UP은 최초 수집 완료나 지역 연속 동기화를 뜻하지 않는다. 시각의 의미와 전체 진단 절차는 [수집 진단 문서](docs/COLLECTOR_DIAGNOSTICS.md)를 참고한다.
 
 ### 운영자가 전체 메타데이터 수집 일정을 앞당길 때
 

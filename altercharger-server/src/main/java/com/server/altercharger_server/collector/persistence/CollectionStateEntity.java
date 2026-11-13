@@ -68,14 +68,23 @@ public class CollectionStateEntity {
     }
 
     /** A successful overlapping change window can repair a failed attempt, but never a coverage gap. */
-    public void completeStatusSync(OffsetDateTime windowStart, OffsetDateTime windowEnd) {
-        if (syncBaselineAt == null || lastStatusSyncAt == null || windowStart == null || windowEnd == null
-                || syncBaselineAt.isAfter(lastStatusSyncAt) || windowStart.isAfter(windowEnd)
-                || windowStart.isAfter(lastStatusSyncAt) || windowEnd.isBefore(lastStatusSyncAt)) {
+    public SyncResult completeStatusSync(OffsetDateTime windowStart, OffsetDateTime windowEnd) {
+        SyncResult rejected = null;
+        if (syncBaselineAt == null || lastStatusSyncAt == null) rejected = SyncResult.BASELINE_MISSING;
+        else if (windowStart == null || windowEnd == null || syncBaselineAt.isAfter(lastStatusSyncAt)
+                || windowStart.isAfter(windowEnd)) rejected = SyncResult.INVALID_SYNC_WINDOW;
+        else if (windowStart.isAfter(lastStatusSyncAt)) rejected = SyncResult.SYNC_WINDOW_GAP;
+        else if (windowEnd.isBefore(lastStatusSyncAt)) rejected = SyncResult.SYNC_CLOCK_REVERSED;
+        if (rejected != null) {
             invalidateStatusBaseline();
-            return;
+            return rejected;
         }
         lastStatusSyncAt = windowEnd;
         statusSyncValid = true;
+        return SyncResult.CONTINUOUS_SYNC;
+    }
+
+    public enum SyncResult {
+        CONTINUOUS_SYNC, BASELINE_MISSING, INVALID_SYNC_WINDOW, SYNC_WINDOW_GAP, SYNC_CLOCK_REVERSED
     }
 }

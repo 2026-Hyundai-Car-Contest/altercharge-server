@@ -6,13 +6,20 @@ import com.server.altercharger_server.collector.CollectedSnapshot.RegionCoverage
 import com.server.altercharger_server.collector.persistence.CollectorLedger;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.State;
 import com.server.altercharger_server.collector.persistence.CollectorLedger.Usage;
+import com.server.altercharger_server.collector.persistence.CollectionStateEntity;
+import com.server.altercharger_server.history.VisitService;
+import com.server.altercharger_server.station.StationDecisionService;
+import com.server.altercharger_server.station.StationQueryService;
 import com.server.altercharger_server.station.StationStore;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -461,6 +468,75 @@ class StationCollectorTests {
         assertEquals(2, calls.get(), "Failed HTTP attempts remain charged against the durable budget");
         verify(store, times(2)).needsStatusBaselineRecovery(Set.of("11"));
         verify(ledger, times(1)).defer(eq("metadata"), any(OffsetDateTime.class), eq(1));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 3})
+    void statusTimeoutRetriesCanPreserveCoverageButNeverBridgeARealGap(int failedRequests) {
+        activeTask = "status";
+        var lastSuccess = OffsetDateTime.now();
+        var baseline = lastSuccess.minusMinutes(20);
+        var region = new CollectionStateEntity("region:11");
+        region.establishStatusBaseline(baseline);
+        for (int minute : List.of(15, 10, 5, 0)) {
+            region.completeStatusSync(lastSuccess.minusMinutes(minute + 10), lastSuccess.minusMinutes(minute));
+        }
+        assertTrue(region.isStatusSyncValid());
+        var time = new AtomicReference<>(lastSuccess.plusMinutes(5));
+        var statusState = new AtomicReference<>(new State(lastSuccess, null, 0));
+        when(ledger.state("status")).thenAnswer(call -> statusState.get());
+        doAnswer(call -> {
+            var previous = statusState.get();
+            statusState.set(new State(previous.succeededAt(), call.getArgument(1), call.getArgument(2)));
+            return null;
+        }).when(ledger).defer(eq("status"), any(), anyInt());
+        doAnswer(call -> { region.beginStatusSync(); return null; }).when(store).beginStatusSync(Set.of("11"));
+        doAnswer(call -> {
+            CollectedSnapshot snapshot = call.getArgument(0);
+            var coverage = snapshot.regionCoverage("11");
+            assertTrue(coverage.totalKnownAndStable());
+            region.completeStatusSync(coverage.lastResponseFinishedAt().minusMinutes(10), coverage.firstRequestStartedAt());
+            statusState.set(new State(call.getArgument(1), null, 0));
+            return null;
+        }).when(store).saveStatuses(any(CollectedSnapshot.class), any());
+        var requests = new AtomicInteger();
+        when(client.fetch(eq("status"), anyString(), eq("11"), eq(1), eq(10))).thenAnswer(call -> {
+            if (requests.getAndIncrement() < failedRequests) {
+                time.set(time.get().plusSeconds(20));
+                throw new CollectionException(CollectionException.Reason.UPSTREAM_REQUEST_FAILED);
+            }
+            time.set(time.get().plusNanos(200_000_000));
+            return page(0, 0, 0, 1, 0);
+        });
+        var collector = spy(collector(100));
+        doAnswer(call -> time.get()).when(collector).now();
+
+        for (int failure = 0; failure < failedRequests; failure++) {
+            collector.collectIfDue();
+            assertFalse(region.isStatusSyncValid());
+            var deadline = time.get().plusMinutes(1L << failure);
+            assertEquals(deadline, statusState.get().retryAfter());
+            collector.collectIfDue();
+            assertEquals(failure + 1, calls.get(), "Persistent backoff prevents requests before the deadline");
+            time.set(deadline);
+        }
+        collector.collectIfDue();
+
+        var unchanged = new StationStore.Charger("01", "04", 50.0, "2", baseline.minusHours(1), baseline, false);
+        when(store.findById("A")).thenReturn(Optional.of(new StationStore.Station(
+                "A", "example", "example", 37.55, 127.14, List.of(unchanged))));
+        when(store.findStatusSyncForStation("A")).thenReturn(region.isStatusSyncValid()
+                ? Optional.of(new StationStore.StatusSync(region.getSyncBaselineAt(), region.getLastStatusSyncAt()))
+                : Optional.empty());
+        var visits = mock(VisitService.class);
+        var decisions = new StationDecisionService(new StationQueryService(store, visits), visits,
+                Clock.fixed(time.get().toInstant(), ZoneOffset.UTC), 15);
+        var navigation = decisions.navigationCheck("A");
+        assertEquals(failedRequests < 3, navigation.navigationAllowed());
+        assertEquals(failedRequests < 3 ? "OK" : "STATUS_STALE", navigation.reasonCode().name());
+        assertEquals(baseline, unchanged.statusObservedAt());
+        assertEquals(failedRequests + 1, calls.get(), "Every retry consumes the same durable call budget");
+        assertEquals(0, metadataCalls.get(), "A later gap must not trigger extra full collections");
     }
 
     private StationCollector collector(int metadataBudget) {

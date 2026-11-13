@@ -22,13 +22,17 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+@ExtendWith(OutputCaptureExtension.class)
 class StationStoreSyncTests {
     private final StationRepository stations = mock(StationRepository.class);
     private final ChargerRepository chargers = mock(ChargerRepository.class);
@@ -209,10 +213,12 @@ class StationStoreSyncTests {
     }
 
     @Test
-    void coverageGapCannotBeRepairedByLaterDeltaSuccessAndRequiresAnotherFullBaseline() {
+    void coverageGapCannotBeRepairedByLaterDeltaSuccessAndRequiresAnotherFullBaseline(CapturedOutput output) {
         metadata("A", "11", baseline);
         status("11", 11, List.of());
+        assertThat(output.getAll()).contains("reason=SYNC_WINDOW_GAP");
         status("11", 16, List.of());
+        assertThat(output.getAll()).contains("reason=BASELINE_MISSING");
 
         assertThat(region("11").getSyncBaselineAt()).isNull();
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline);
@@ -258,12 +264,13 @@ class StationStoreSyncTests {
     }
 
     @Test
-    void malformedDeltaWithoutSourceTimestampCannotSilentlyExtendOlderState() {
+    void malformedDeltaWithoutSourceTimestampCannotSilentlyExtendOlderState(CapturedOutput output) {
         metadata("A", "11", baseline);
         status("11", 5, List.of(item("A", "3", null)));
         assertThat(charger.getRawStatus()).isEqualTo("2");
         assertThat(charger.getStatusObservedAt()).isEqualTo(baseline);
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
+        assertThat(output.getAll()).contains("reason=SOURCE_TIME_MISSING");
     }
 
     @Test
@@ -281,22 +288,37 @@ class StationStoreSyncTests {
     }
 
     @Test
-    void anotherRegionsChargerCannotBeChangedOrCertifyCoverage() {
+    void anotherRegionsChargerCannotBeChangedOrCertifyCoverage(CapturedOutput output) {
         var other = addStation("B", "26", baseline);
         metadata("A", "11", baseline);
         status("11", 5, List.of(item("B", "3", baseline.plusMinutes(4))));
         assertThat(other.getRawStatus()).isEqualTo("2");
         assertThat(other.getStatusObservedAt()).isEqualTo(baseline);
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
+        assertThat(output.getAll()).contains("reason=REGION_MISMATCH");
     }
 
     @Test
-    void futureSourceTimestampCannotCertifyRegionalCoverage() {
+    void futureSourceTimestampCannotCertifyRegionalCoverage(CapturedOutput output) {
         metadata("A", "11", baseline);
         status("11", 5, List.of(item("A", "3", baseline.plusMinutes(6))));
         assertThat(charger.getRawStatus()).isEqualTo("3");
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline);
+        assertThat(output.getAll()).contains("reason=SOURCE_TIME_FUTURE");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void unknownChargerWithMissingOrFutureSourceTimeCannotCertifyOtherChargers(boolean future, CapturedOutput output) {
+        metadata("A", "11", baseline);
+        status("11", 5, List.of(item("NOT-IN-METADATA", "2", future ? baseline.plusMinutes(6) : null)));
+
+        assertThat(store.findStatusSyncForStation("A")).isEmpty();
+        assertThat(charger.getRawStatus()).isEqualTo("2");
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline);
+        verify(entityManager, never()).persist(isA(ChargerEntity.class));
+        assertThat(output.getAll()).contains("reason=" + (future ? "SOURCE_TIME_FUTURE" : "SOURCE_TIME_MISSING"));
     }
 
     @Test
@@ -318,7 +340,7 @@ class StationStoreSyncTests {
 
     @ParameterizedTest
     @ValueSource(ints = {251, 100_001})
-    void crossBatchDuplicatesOrExcessiveIdentityProofDoNotCertifyCoverageButStillMergeRows(int count) {
+    void crossBatchDuplicatesOrExcessiveIdentityProofDoNotCertifyCoverageButStillMergeRows(int count, CapturedOutput output) {
         metadata("A", "11", baseline);
         store.beginStatusSync(Set.of("11"));
         var at = baseline.plusMinutes(5);
@@ -341,6 +363,8 @@ class StationStoreSyncTests {
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline);
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
         verify(entityManager, never()).persist(isA(ChargerEntity.class));
+        assertThat(output.getAll()).contains("reason=" + (count == 251
+                ? "DUPLICATE_DELTA_IDENTITY" : "DELTA_IDENTITY_LIMIT_EXCEEDED"));
     }
 
     private ChargerEntity addStation(String id, String region, OffsetDateTime at) {

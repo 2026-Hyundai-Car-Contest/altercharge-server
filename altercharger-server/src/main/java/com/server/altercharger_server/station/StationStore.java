@@ -163,27 +163,34 @@ public class StationStore {
     /** Only returned rows change. Regional coverage commits atomically with all delta batches. */
     @Transactional
     public void saveStatuses(CollectedSnapshot snapshot, OffsetDateTime observedAt) {
-        Map<String, Boolean> applied = new HashMap<>();
+        Map<String, DeltaValidation> applied = new HashMap<>();
         var identities = new DeltaIdentities();
-        snapshot.regionCodes().forEach(region -> applied.put(region, true));
+        snapshot.regionCodes().forEach(region -> applied.put(region, DeltaValidation.VALID));
         snapshot.forEachBatch((region, items) -> {
             var coverage = snapshot.regionCoverage(region);
-            boolean unique = identities.accept(region, items);
-            boolean batchApplied = updateStatuses(items, observedAt, region,
-                    coverage == null ? null : coverage.lastResponseFinishedAt()) && unique;
-            applied.compute(region, (key, previous) -> Boolean.TRUE.equals(previous) && batchApplied);
+            var identityValidation = identities.accept(region, items);
+            var batchValidation = updateStatuses(items, observedAt, region,
+                    coverage == null ? null : coverage.lastResponseFinishedAt());
+            var validation = identityValidation == DeltaValidation.VALID ? batchValidation : identityValidation;
+            applied.compute(region, (key, previous) -> previous == DeltaValidation.VALID ? validation : previous);
         });
         for (String region : snapshot.regionCodes()) {
             var state = regionState(region);
-            if (provenCoverage(snapshot, region) && Boolean.TRUE.equals(applied.get(region))) {
+            String reason;
+            if (!provenCoverage(snapshot, region)) {
+                state.invalidateStatusBaseline();
+                reason = "UNPROVEN_PAGES";
+            } else if (applied.get(region) != DeltaValidation.VALID) {
+                state.invalidateStatusBaseline();
+                reason = applied.get(region).name();
+            } else {
                 var coverage = snapshot.regionCoverage(region);
                 // Assume a complete upstream feed and sufficiently aligned clocks. The common window
                 // uses the last response's lower bound and the FIRST request's upper bound, never completion.
-                state.completeStatusSync(coverage.lastResponseFinishedAt().minusMinutes(10),
-                        coverage.firstRequestStartedAt());
-            } else state.invalidateStatusBaseline();
-            logSync("status", region, snapshot.regionCoverage(region),
-                    state.isStatusSyncValid() ? "CONTINUOUS_SYNC" : "UNPROVEN_OR_GAPPED_SYNC");
+                reason = state.completeStatusSync(coverage.lastResponseFinishedAt().minusMinutes(10),
+                        coverage.firstRequestStartedAt()).name();
+            }
+            logSync("status", region, snapshot.regionCoverage(region), reason);
         }
         markSucceeded("status", observedAt);
     }
@@ -194,30 +201,37 @@ public class StationStore {
         markSucceeded("status", observedAt);
     }
 
-    private boolean updateStatuses(List<Item> items, OffsetDateTime observedAt,
+    private DeltaValidation updateStatuses(List<Item> items, OffsetDateTime observedAt,
                                    String region, OffsetDateTime responseFinishedAt) {
-        boolean complete = true;
+        var validation = DeltaValidation.VALID;
         Set<ChargerId> ids = items.stream().filter(Item::hasIdentity)
                 .map(item -> new ChargerId(item.statId(), item.chgerId())).collect(Collectors.toSet());
-        if (ids.isEmpty()) return items.isEmpty();
+        if (ids.isEmpty()) return items.isEmpty() ? DeltaValidation.VALID : DeltaValidation.INVALID_IDENTITY;
         Map<ChargerId, ChargerEntity> known = chargers.findByIds(ids).stream()
                 .collect(Collectors.toMap(ChargerEntity::getId, Function.identity()));
         for (Item item : items) {
             if (!item.hasIdentity()) {
-                complete = false;
+                validation = firstRejection(validation, DeltaValidation.INVALID_IDENTITY);
                 continue;
+            }
+            // Every returned change participates in feed validation, including a new identity
+            // that cannot be merged until its full metadata arrives.
+            if (item.statUpdDt() == null) {
+                validation = firstRejection(validation, DeltaValidation.SOURCE_TIME_MISSING);
+            } else if (responseFinishedAt != null && item.statUpdDt().isAfter(responseFinishedAt)) {
+                validation = firstRejection(validation, DeltaValidation.SOURCE_TIME_FUTURE);
             }
             ChargerEntity charger = known.get(new ChargerId(item.statId(), item.chgerId()));
             // New chargers need full metadata; no availability is invented for an unknown identity.
             if (charger == null) continue;
             if (region != null && !region.equals(charger.getStation().getZcode())) {
-                complete = false;
+                validation = firstRejection(validation, DeltaValidation.REGION_MISMATCH);
                 continue;
             }
-            if (item.statUpdDt() == null || responseFinishedAt != null
-                    && (item.statUpdDt().isAfter(responseFinishedAt)
-                    || charger.getStatusUpdatedAt() != null
-                    && charger.getStatusUpdatedAt().isAfter(responseFinishedAt))) complete = false;
+            if (responseFinishedAt != null && charger.getStatusUpdatedAt() != null
+                    && charger.getStatusUpdatedAt().isAfter(responseFinishedAt)) {
+                validation = firstRejection(validation, DeltaValidation.CACHED_SOURCE_TIME_FUTURE);
+            }
             if (!canApplyStatus(charger, item.statUpdDt())) {
                 continue;
             }
@@ -227,11 +241,20 @@ public class StationStore {
                 charger.setDeleted(true);
             } else if (!charger.isDeleted() && !item.stat().isBlank() && item.stat().length() <= 100) {
                 applyStatus(charger, item.stat(), item.statUpdDt(), observedAt);
-            } else if (!charger.isDeleted()) complete = false;
+            } else if (!charger.isDeleted()) validation = firstRejection(validation, DeltaValidation.INVALID_STATUS);
         }
         entityManager.flush();
         entityManager.clear();
-        return complete;
+        return validation;
+    }
+
+    private enum DeltaValidation {
+        VALID, INVALID_IDENTITY, REGION_MISMATCH, SOURCE_TIME_MISSING, SOURCE_TIME_FUTURE,
+        CACHED_SOURCE_TIME_FUTURE, INVALID_STATUS, DUPLICATE_DELTA_IDENTITY, DELTA_IDENTITY_LIMIT_EXCEEDED
+    }
+
+    private static DeltaValidation firstRejection(DeltaValidation previous, DeltaValidation current) {
+        return previous == DeltaValidation.VALID ? current : previous;
     }
 
     /** Bounded delta-ID validation, never a list/cache of all stored charger entities. */
@@ -239,24 +262,27 @@ public class StationStore {
         private static final int LIMIT = 100_000;
         private final Set<ChargerId> seen = new HashSet<>();
         private String region;
-        private boolean exhausted;
+        private DeltaValidation validation = DeltaValidation.VALID;
 
-        boolean accept(String currentRegion, List<Item> items) {
+        DeltaValidation accept(String currentRegion, List<Item> items) {
             // Snapshot batches for one region are contiguous, so only one region's IDs are retained.
             if (!currentRegion.equals(region)) {
                 seen.clear();
-                exhausted = false;
+                validation = DeltaValidation.VALID;
                 region = currentRegion;
             }
-            if (exhausted) return false;
+            if (validation != DeltaValidation.VALID) return validation;
             for (Item item : items) {
-                if (seen.size() >= LIMIT || !seen.add(new ChargerId(item.statId(), item.chgerId()))) {
-                    exhausted = true;
+                if (seen.size() >= LIMIT) validation = DeltaValidation.DELTA_IDENTITY_LIMIT_EXCEEDED;
+                else if (!seen.add(new ChargerId(item.statId(), item.chgerId()))) {
+                    validation = DeltaValidation.DUPLICATE_DELTA_IDENTITY;
+                }
+                if (validation != DeltaValidation.VALID) {
                     seen.clear();
-                    return false;
+                    return validation;
                 }
             }
-            return true;
+            return validation;
         }
     }
 

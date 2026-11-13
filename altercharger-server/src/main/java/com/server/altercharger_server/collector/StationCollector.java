@@ -142,9 +142,12 @@ public class StationCollector {
             }
         } catch (Exception ex) {
             int failures = Math.min(state.failures() + 1, 10);
+            // Waiting another five minutes after a timed-out five-minute poll necessarily
+            // exceeds the upstream's ten-minute window. Retry status sooner, within the same quota.
+            long initialBackoffMinutes = task.equals("status") ? 1 : 5;
             OffsetDateTime retryAfter = ex instanceof BudgetExhausted
                     ? LocalDate.now(SEOUL).plusDays(1).atStartOfDay(SEOUL).toOffsetDateTime()
-                    : now().plusMinutes(Math.min(360, 5L << (failures - 1)));
+                    : now().plusMinutes(Math.min(360, initialBackoffMinutes << (failures - 1)));
             ledger.defer(task, retryAfter, failures);
             Reason reason = ex instanceof CollectionException failure ? failure.reason() : Reason.UNEXPECTED_FAILURE;
             log.warn("Collector deferred task={} region={} page={} received={} expectedTotal={} reportedTotal={} "
