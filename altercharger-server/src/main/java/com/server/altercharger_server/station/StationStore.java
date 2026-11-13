@@ -149,8 +149,8 @@ public class StationStore {
             if (canApplyStatus(charger, item.statUpdDt())) {
                 applyStatus(charger, rawStatus, item.statUpdDt(), observedAt);
             } else if (rawStatus.equals(charger.getRawStatus())) {
-                // A full response actually reconfirmed this state. Keep the newer source watermark,
-                // but connect the real observation to the new baseline; omitted deltas never do this.
+                // Full metadata reconfirmed this state. Preserve its newer source watermark;
+                // completed status polls separately refresh the region's cache-confirmation clocks.
                 charger.setStatusObservedAt(observedAt);
             }
             if (newCharger) entityManager.persist(charger);
@@ -160,7 +160,7 @@ public class StationStore {
         entityManager.clear();
     }
 
-    /** Only returned rows change. Regional coverage commits atomically with all delta batches. */
+    /** Merge returned states, then confirm all active cached states after a complete regional poll. */
     @Transactional
     public void saveStatuses(CollectedSnapshot snapshot, OffsetDateTime observedAt) {
         Map<String, DeltaValidation> applied = new HashMap<>();
@@ -175,9 +175,18 @@ public class StationStore {
             applied.compute(region, (key, previous) -> previous == DeltaValidation.VALID ? validation : previous);
         });
         for (String region : snapshot.regionCodes()) {
+            boolean completePages = provenCoverage(snapshot, region);
+            if (completePages) {
+                // Product policy: a successful poll confirms retained states, including omitted changes.
+                // This is cache confirmation, not a new report from each physical charger. One JPQL
+                // update avoids loading the region's entities and commits with every merged delta.
+                int refreshed = chargers.refreshStatusObservedAtForRegions(Set.of(region), observedAt);
+                log.info("Collector refresh task=status region={} chargers={} stage=OBSERVATION_REFRESH reason=STATUS_POLL_CONFIRMED",
+                        region, refreshed);
+            }
             var state = regionState(region);
             String reason;
-            if (!provenCoverage(snapshot, region)) {
+            if (!completePages) {
                 state.invalidateStatusBaseline();
                 reason = "UNPROVEN_PAGES";
             } else if (applied.get(region) != DeltaValidation.VALID) {
@@ -197,6 +206,7 @@ public class StationStore {
 
     @Transactional
     public void saveStatuses(List<Item> items, OffsetDateTime observedAt) {
+        // Fixture/import calls have no regional page evidence, so they only merge returned rows.
         forBatches(items, batch -> updateStatuses(batch, observedAt, null, null));
         markSucceeded("status", observedAt);
     }

@@ -472,7 +472,7 @@ class StationCollectorTests {
 
     @ParameterizedTest
     @ValueSource(ints = {1, 2, 3})
-    void statusTimeoutRetriesCanPreserveCoverageButNeverBridgeARealGap(int failedRequests) {
+    void statusRetriesPreserveCoverageWhenPossibleAndConfirmTheCacheOnSuccess(int failedRequests) {
         activeTask = "status";
         var lastSuccess = OffsetDateTime.now();
         var baseline = lastSuccess.minusMinutes(20);
@@ -483,6 +483,7 @@ class StationCollectorTests {
         }
         assertTrue(region.isStatusSyncValid());
         var time = new AtomicReference<>(lastSuccess.plusMinutes(5));
+        var confirmedAt = new AtomicReference<>(lastSuccess);
         var statusState = new AtomicReference<>(new State(lastSuccess, null, 0));
         when(ledger.state("status")).thenAnswer(call -> statusState.get());
         doAnswer(call -> {
@@ -496,6 +497,7 @@ class StationCollectorTests {
             var coverage = snapshot.regionCoverage("11");
             assertTrue(coverage.totalKnownAndStable());
             region.completeStatusSync(coverage.lastResponseFinishedAt().minusMinutes(10), coverage.firstRequestStartedAt());
+            confirmedAt.set(call.getArgument(1));
             statusState.set(new State(call.getArgument(1), null, 0));
             return null;
         }).when(store).saveStatuses(any(CollectedSnapshot.class), any());
@@ -522,7 +524,7 @@ class StationCollectorTests {
         }
         collector.collectIfDue();
 
-        var unchanged = new StationStore.Charger("01", "04", 50.0, "2", baseline.minusHours(1), baseline, false);
+        var unchanged = new StationStore.Charger("01", "04", 50.0, "2", baseline.minusHours(1), confirmedAt.get(), false);
         when(store.findById("A")).thenReturn(Optional.of(new StationStore.Station(
                 "A", "example", "example", 37.55, 127.14, List.of(unchanged))));
         when(store.findStatusSyncForStation("A")).thenReturn(region.isStatusSyncValid()
@@ -532,9 +534,10 @@ class StationCollectorTests {
         var decisions = new StationDecisionService(new StationQueryService(store, visits), visits,
                 Clock.fixed(time.get().toInstant(), ZoneOffset.UTC), 15);
         var navigation = decisions.navigationCheck("A");
-        assertEquals(failedRequests < 3, navigation.navigationAllowed());
-        assertEquals(failedRequests < 3 ? "OK" : "STATUS_STALE", navigation.reasonCode().name());
-        assertEquals(baseline, unchanged.statusObservedAt());
+        assertTrue(navigation.navigationAllowed());
+        assertEquals("OK", navigation.reasonCode().name());
+        assertEquals(failedRequests < 3, region.isStatusSyncValid(), "Cache confirmation cannot fabricate regional continuity");
+        assertEquals(statusState.get().succeededAt(), unchanged.statusObservedAt());
         assertEquals(failedRequests + 1, calls.get(), "Every retry consumes the same durable call budget");
         assertEquals(0, metadataCalls.get(), "A later gap must not trigger extra full collections");
     }

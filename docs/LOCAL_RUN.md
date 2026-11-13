@@ -38,7 +38,7 @@ docker compose --env-file .env -f compose.yaml cp caddy:/data/caddy/pki/authorit
 
 ## 로그와 종료
 
-수집 로그는 다음 명령으로 확인한다. `Collector status completed`는 반환된 변경분의 반영 완료이고, 지역 최신성 근거가 인정됐는지는 `SYNC_COVERAGE`의 원인 코드로 구분한다. [수집 진단 문서](COLLECTOR_DIAGNOSTICS.md)를 참고한다.
+수집 로그는 다음 명령으로 확인한다. `Collector status completed`는 변경분과 캐시 확인 시각의 반영 완료다. `STATUS_POLL_CONFIRMED`와 적용 행 수로 지역 전체 활성 충전기 시각 갱신을 확인하고, 기존 지역 연속성 진단은 `SYNC_COVERAGE`로 구분한다. [수집 진단 문서](COLLECTOR_DIAGNOSTICS.md)를 참고한다.
 
 ```sh
 docker compose --env-file .env -f compose.yaml logs --since=1h --follow app

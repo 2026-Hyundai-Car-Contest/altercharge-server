@@ -76,6 +76,14 @@ class StationStoreSyncTests {
             return stationRows.values().stream().flatMap(s -> s.getChargers().stream())
                     .filter(c -> ids.contains(c.getId())).toList();
         });
+        when(chargers.refreshStatusObservedAtForRegions(anyCollection(), any())).thenAnswer(call -> {
+            java.util.Collection<String> regions = call.getArgument(0);
+            OffsetDateTime at = call.getArgument(1);
+            var active = stationRows.values().stream().filter(s -> regions.contains(s.getZcode()))
+                    .flatMap(s -> s.getChargers().stream()).filter(c -> !c.isDeleted()).toList();
+            active.forEach(c -> c.setStatusObservedAt(at));
+            return active.size();
+        });
         doAnswer(call -> {
             if (call.getArgument(0) instanceof CollectionStateEntity state) stateRows.put(state.getTask(), state);
             return null;
@@ -83,18 +91,31 @@ class StationStoreSyncTests {
     }
 
     @Test
-    void zeroChangesAdvanceOneRegionalRowWithoutReadingOrUpdatingChargerRows() {
+    void zeroChangesRefreshAllActiveRegionalClocksWithoutLoadingTheirEntities() {
         metadata("A", "11", baseline);
+        var sameRegion = addStation("B", "11", baseline);
+        sameRegion.setRawStatus("3");
+        var elsewhere = addStation("C", "26", baseline);
+        var deleted = addStation("D", "11", baseline);
+        deleted.setDeleted(true);
         clearInvocations(chargers, entityManager);
 
         for (int minute : List.of(5, 10, 15)) status("11", minute, List.of());
 
         assertThat(navigation("A", 16)).isEqualTo(NavigationReason.OK);
-        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(15));
+        assertThat(sameRegion.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(15));
+        assertThat(sameRegion.getRawStatus()).isEqualTo("3");
+        assertThat(elsewhere.getStatusObservedAt()).isEqualTo(baseline);
+        assertThat(deleted.getStatusObservedAt()).isEqualTo(baseline);
         assertThat(charger.getStatusUpdatedAt()).isEqualTo(baseline.minusHours(1));
+        assertThat(stationRows.get("A").getMetadataObservedAt()).isEqualTo(baseline);
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline.plusMinutes(15));
         assertThat(stateRows).hasSize(3);
-        verifyNoInteractions(chargers);
+        for (int minute : List.of(5, 10, 15)) {
+            verify(chargers).refreshStatusObservedAtForRegions(Set.of("11"), baseline.plusMinutes(minute));
+        }
+        verify(chargers, never()).findByIds(anyCollection());
         verify(entityManager, never()).persist(any());
         verify(stations, never()).findActiveWithChargers();
     }
@@ -156,7 +177,7 @@ class StationStoreSyncTests {
         assertThat(navigation("A", 36)).isEqualTo(NavigationReason.OK);
         assertThat(charger.getRawStatus()).isEqualTo("2");
         assertThat(charger.getStatusUpdatedAt()).isEqualTo(sourceAt);
-        assertThat(charger.getStatusObservedAt()).isEqualTo(fullAt);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(35));
         assertThat(region("11").getSyncBaselineAt()).isEqualTo(fullAt);
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline.plusMinutes(35));
     }
@@ -171,12 +192,13 @@ class StationStoreSyncTests {
                 fullAt, fullAt.plusSeconds(1), true)) {
             store.saveMetadata(snapshot, fullAt);
         }
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
         for (int minute : List.of(25, 30, 35)) status("11", minute, List.of());
 
-        assertThat(navigation("A", 36)).isEqualTo(NavigationReason.STATUS_STALE);
+        assertThat(navigation("A", 36)).isEqualTo(NavigationReason.OK);
         assertThat(charger.getRawStatus()).isEqualTo("2");
         assertThat(charger.getStatusUpdatedAt()).isEqualTo(sourceAt);
-        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(35));
     }
 
     @Test
@@ -191,7 +213,7 @@ class StationStoreSyncTests {
         assertThat(stationRows.get("A").getChargers()).containsExactly(charger);
         assertThat(charger.getRawStatus()).isEqualTo("3");
         assertThat(charger.getStatusUpdatedAt()).isEqualTo(baseline.plusMinutes(4));
-        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(10));
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(15));
         assertThat(navigation("A", 16)).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
         verify(entityManager, never()).persist(isA(ChargerEntity.class));
     }
@@ -205,15 +227,16 @@ class StationStoreSyncTests {
 
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline.plusMinutes(5));
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
-        assertThat(navigation("A", 16)).isEqualTo(NavigationReason.STATUS_STALE);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
+        assertThat(navigation("A", 21)).isEqualTo(NavigationReason.STATUS_STALE);
         assertThat(store.hasCollectedData()).isTrue();
 
         status("11", 12, List.of());
-        assertThat(navigation("A", 16)).isEqualTo(NavigationReason.OK);
+        assertThat(navigation("A", 21)).isEqualTo(NavigationReason.OK);
     }
 
     @Test
-    void coverageGapCannotBeRepairedByLaterDeltaSuccessAndRequiresAnotherFullBaseline(CapturedOutput output) {
+    void successfulPollRefreshesNavigationAfterAGapWhileRegionalDiagnosticStaysInvalid(CapturedOutput output) {
         metadata("A", "11", baseline);
         status("11", 11, List.of());
         assertThat(output.getAll()).contains("reason=SYNC_WINDOW_GAP");
@@ -222,12 +245,14 @@ class StationStoreSyncTests {
 
         assertThat(region("11").getSyncBaselineAt()).isNull();
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline);
-        assertThat(navigation("A", 16)).isEqualTo(NavigationReason.STATUS_STALE);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(16));
+        assertThat(navigation("A", 16)).isEqualTo(NavigationReason.OK);
+        assertThat(navigation("A", 32)).isEqualTo(NavigationReason.STATUS_STALE);
 
         metadata("A", "11", baseline.plusMinutes(20));
         status("11", 25, List.of());
         assertThat(navigation("A", 36)).isEqualTo(NavigationReason.OK);
-        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(20));
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(25));
     }
 
     @Test
@@ -244,6 +269,8 @@ class StationStoreSyncTests {
     @Test
     void unprovenPaginationCanApplyObservedChangesButCannotCertifyRegionalSync() {
         metadata("A", "11", baseline);
+        var omitted = addStation("B", "11", baseline);
+        clearInvocations(chargers);
         store.beginStatusSync(Set.of("11"));
         try (var snapshot = snapshot("11", List.of(item("A", "3", baseline.plusMinutes(4))),
                 baseline.plusMinutes(5), baseline.plusMinutes(5).plusSeconds(1), false)) {
@@ -253,6 +280,8 @@ class StationStoreSyncTests {
         assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline);
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
+        assertThat(omitted.getStatusObservedAt()).isEqualTo(baseline);
+        verify(chargers, never()).refreshStatusObservedAtForRegions(anyCollection(), any());
     }
 
     @Test
@@ -261,14 +290,15 @@ class StationStoreSyncTests {
         assertThat(region("11").getSyncBaselineAt()).isNull();
         assertThat(region("11").getLastStatusSyncAt()).isNull();
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
     }
 
     @Test
-    void malformedDeltaWithoutSourceTimestampCannotSilentlyExtendOlderState(CapturedOutput output) {
+    void missingSourceTimestampPreservesRawStateWhilePollConfirmsItsCacheClock(CapturedOutput output) {
         metadata("A", "11", baseline);
         status("11", 5, List.of(item("A", "3", null)));
         assertThat(charger.getRawStatus()).isEqualTo("2");
-        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
         assertThat(output.getAll()).contains("reason=SOURCE_TIME_MISSING");
     }
@@ -282,7 +312,8 @@ class StationStoreSyncTests {
         status("26", 12, List.of());
 
         assertThat(navigation("A", 18)).isEqualTo(NavigationReason.OK);
-        assertThat(navigation("B", 18)).isEqualTo(NavigationReason.STATUS_STALE);
+        assertThat(navigation("B", 18)).isEqualTo(NavigationReason.OK);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
         assertThat(region("11").getLastStatusSyncAt()).isEqualTo(baseline.plusMinutes(5));
         assertThat(region("26").getLastStatusSyncAt()).isEqualTo(baseline.plusMinutes(1));
     }
@@ -316,7 +347,7 @@ class StationStoreSyncTests {
 
         assertThat(store.findStatusSyncForStation("A")).isEmpty();
         assertThat(charger.getRawStatus()).isEqualTo("2");
-        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
         verify(entityManager, never()).persist(isA(ChargerEntity.class));
         assertThat(output.getAll()).contains("reason=" + (future ? "SOURCE_TIME_FUTURE" : "SOURCE_TIME_MISSING"));
     }
@@ -336,6 +367,19 @@ class StationStoreSyncTests {
         assertThat(charger.getRawStatus()).isEqualTo("0");
         assertThat(charger.getStatusUpdatedAt()).isEqualTo(baseline.plusMinutes(4));
         assertThat(navigation("A", 7)).isEqualTo(NavigationReason.NO_AVAILABLE_CHARGER);
+    }
+
+    @Test
+    void aLaterSuccessfulEmptyPollNeverRefreshesOrRevivesDeletedRows() {
+        metadata("A", "11", baseline);
+        var sourceAt = baseline.plusMinutes(4);
+        status("11", 5, List.of(new Item("A", "", "", null, null, "01", "", null, "2", sourceAt, true)));
+        status("11", 10, List.of());
+
+        assertThat(charger.isDeleted()).isTrue();
+        assertThat(charger.getRawStatus()).isEqualTo("0");
+        assertThat(charger.getStatusUpdatedAt()).isEqualTo(sourceAt);
+        assertThat(charger.getStatusObservedAt()).isEqualTo(baseline.plusMinutes(5));
     }
 
     @ParameterizedTest

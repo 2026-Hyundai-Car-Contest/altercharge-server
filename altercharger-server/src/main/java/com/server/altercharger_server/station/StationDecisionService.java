@@ -74,8 +74,8 @@ public class StationDecisionService {
         var at = charger.statusObservedAt();
         if (at == null || at.isAfter(now)) return false;
         if (recent(at, now)) return true;
-        // A complete, continuous change feed can confirm an unchanged baseline state;
-        // it never manufactures a per-charger observation or an AVAILABLE status.
+        // Retain regional continuity as a fallback for older caches; the recent cache-confirmation
+        // clock, refreshed for all active chargers on a complete poll, takes priority above.
         return sync != null && !at.isBefore(sync.baselineAt()) && !at.isAfter(sync.lastStatusSyncAt());
     }
 

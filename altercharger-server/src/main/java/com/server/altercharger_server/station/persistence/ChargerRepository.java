@@ -1,5 +1,6 @@
 package com.server.altercharger_server.station.persistence;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -17,4 +18,13 @@ public interface ChargerRepository extends JpaRepository<ChargerEntity, ChargerI
             where c.station.stationId in (select s.stationId from StationEntity s where s.zcode in :zcodes)
             """)
     int markDeletedForRegions(@Param("zcodes") Collection<String> zcodes);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            update ChargerEntity c set c.statusObservedAt = :observedAt
+            where c.deleted = false and c.station.stationId in
+                (select s.stationId from StationEntity s where s.zcode in :zcodes)
+            """)
+    int refreshStatusObservedAtForRegions(@Param("zcodes") Collection<String> zcodes,
+                                         @Param("observedAt") OffsetDateTime observedAt);
 }

@@ -16,7 +16,7 @@ public final class StationDecisionResponses {
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "VISITS_THEN_DISTANCE: 가용 후보 중 방문·거리·ID 순; NEAREST_FALLBACK: 가용 조건을 만족하지 못해 최단거리 대체; NO_STATIONS_IN_RADIUS: 반경 내 0건")
             RecommendationReason reasonCode,
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "가용·속도 조건을 충족하지 못한 최단거리 대체 여부", example = "false") boolean fallbackUsed,
-            @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "선택 충전소 유효 충전기의 가장 오래된 실제 관측 시각. 미관측 또는 결과 없음은 null", nullable = true, example = "2026-11-11T01:30:00+09:00")
+            @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "선택 충전소 유효 충전기의 가장 오래된 캐시 상태 확인 시각. 정상 상태 수집 시 미반환 활성 항목도 시각 갱신. 미확인 또는 결과 없음은 null", nullable = true, example = "2026-11-11T01:30:00+09:00")
             OffsetDateTime statusObservedAt) {}
 
     public record RecommendedStation(
@@ -30,7 +30,7 @@ public final class StationDecisionResponses {
 
     public record NavigationCheck(
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "환경공단 원본 statId", example = "ST-001") String stationId,
-            @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "최근 실제 관측 또는 해당 관측과 연결된 유효한 지역 연속 동기화로 상태가 확인된 AVAILABLE 충전기가 하나 이상이면 true. 동기화는 실제 충전기와 직접 통신한 확인이 아님", example = "false") boolean navigationAllowed,
+            @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "유효기간 안의 캐시 확인 시각을 가진 AVAILABLE 충전기가 하나 이상이면 true. 정상 상태 수집 시 지역의 모든 활성 충전기 시각을 갱신하므로 지역 연속성 진단이 무효여도 허용 가능. 개별 충전기와 직접 통신한 확인은 아님", example = "false") boolean navigationAllowed,
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, allowableValues = {"OK", "STATUS_STALE", "NO_AVAILABLE_CHARGER"}, description = "OK: 최신성 근거가 유효한 AVAILABLE이 하나 이상; STATUS_STALE: 유효한 AVAILABLE이 없고 최신성 근거가 부족한 충전기가 하나 이상; NO_AVAILABLE_CHARGER: 나머지 모든 경우. 유효 충전기 0개도 NO_AVAILABLE_CHARGER이며 원천 상태별 세부 차단 사유는 구분하지 않음") NavigationReason reasonCode,
             @Schema(requiredMode = Schema.RequiredMode.REQUIRED, description = "서버가 캐시의 유효기간과 상태를 확인한 시각. 원천 상태 변경 시각과 다름", example = "2026-11-11T01:31:00+09:00") OffsetDateTime checkedAt) {}
 }

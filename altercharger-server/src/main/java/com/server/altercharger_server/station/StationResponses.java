@@ -45,7 +45,7 @@ public final class StationResponses {
             Double maxOutputKw,
             @Schema(description = "현재 Mock 사용자의 검증된 실제 방문 횟수. 집계 원천이 없으면 null. Mock 이벤트 제외", nullable = true, minimum = "0", requiredMode = Schema.RequiredMode.REQUIRED)
             Integer visitCount,
-            @Schema(description = "유효 충전기 중 가장 오래된 상태 관측 시각. 하나라도 미관측이면 null. 변경분에 없는 충전기의 시각은 유지", nullable = true, type = "string", format = "date-time", example = "2026-11-11T01:30:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED)
+            @Schema(description = "유효 충전기 중 가장 오래된 캐시 상태 확인 시각. 전체 페이지가 확인된 상태 수집이 커밋되면 해당 지역의 모든 활성 충전기를 수집 시작 시각으로 갱신. 하나라도 미확인이면 null", nullable = true, type = "string", format = "date-time", example = "2026-11-11T01:30:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED)
             OffsetDateTime statusObservedAt) {}
 
     @Schema(name = "StationDetail", description = "API 02. 저장된 충전소와 유효 충전기 상세. 충전 요금 필드 제외")
@@ -66,7 +66,7 @@ public final class StationResponses {
             int totalValidCount,
             @ArraySchema(arraySchema = @Schema(description = "유효 충전기 상세. chargerId 문자열 오름차순", requiredMode = Schema.RequiredMode.REQUIRED), schema = @Schema(implementation = ChargerDetail.class))
             List<ChargerDetail> chargers,
-            @Schema(description = "유효 충전기 중 가장 오래된 상태 관측 시각. 하나라도 미관측이면 null", nullable = true, type = "string", format = "date-time", example = "2026-11-11T01:30:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED)
+            @Schema(description = "유효 충전기 중 가장 오래된 캐시 상태 확인 시각. 정상 상태 수집 시 미반환 항목을 포함해 활성 충전기의 시각을 갱신. 하나라도 미확인이면 null", nullable = true, type = "string", format = "date-time", example = "2026-11-11T01:30:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED)
             OffsetDateTime statusObservedAt) {}
 
     @Schema(name = "ChargerDetail", description = "충전기 상세. 원본 코드와 정규화 값을 함께 제공")
@@ -87,6 +87,6 @@ public final class StationResponses {
             String stat,
             @Schema(description = "환경공단 statUpdDt 상태 변경 시각. 미제공·파싱 불가이면 null", nullable = true, type = "string", format = "date-time", example = "2026-11-11T01:29:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED)
             OffsetDateTime statusUpdatedAt,
-            @Schema(description = "서버가 이 충전기의 상태를 실제 관측한 시각. 미관측이면 null", nullable = true, type = "string", format = "date-time", example = "2026-11-11T01:30:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED)
+            @Schema(description = "서버 캐시의 상태 확인 시각. 전체 정보에서 재확인하거나 정상 상태 수집의 전체 페이지를 커밋하면 미반환 항목도 수집 시작 시각으로 갱신. 개별 충전기의 새 보고 시각은 아니며 원천 변경 시각은 statusUpdatedAt", nullable = true, type = "string", format = "date-time", example = "2026-11-11T01:30:00+09:00", requiredMode = Schema.RequiredMode.REQUIRED)
             OffsetDateTime statusObservedAt) {}
 }
