@@ -1,0 +1,33 @@
+{
+  "verdict": "accept",
+  "genre": "report",
+  "fidelity_violations": [],
+  "fidelity_checks": {
+    "facts_and_claims": "pass",
+    "numbers_and_names": "pass",
+    "conditions_and_modality": "pass",
+    "content_anchors": "pass",
+    "register_and_genre": "pass"
+  },
+  "residual_findings": [
+    {
+      "id": "E-2",
+      "severity": "S2",
+      "finding": "앞의 네 문장이 합니다로 끝나는 반복을 유지했다.",
+      "disposition": "짧은 기술 보고서의 합쇼체가 자연스러워 억지로 종결어미를 바꾸지 않았다."
+    }
+  ],
+  "overediting_findings": [],
+  "correction_count": 0,
+  "body_corrections": 0,
+  "summary_updates": 1,
+  "backup": "final_pre_finalize.md",
+  "change_rate": 0.0102,
+  "grade": "B",
+  "self_check": {
+    "passed": 6,
+    "total": 6
+  },
+  "human_review_required": false,
+  "reason": "핵심 진단인 연결어미 뒤 쉼표 반복이 해소됐고 내용과 합쇼체가 보존돼 본문을 그대로 채택했다."
+}
