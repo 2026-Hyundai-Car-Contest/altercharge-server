@@ -519,9 +519,9 @@ Host: 15-164-244-37.sslip.io
 
 유효 기록일은 서울 날짜별 **2개 이상** 기록이 있고, **첫 측정 01:00 이하·마지막 측정 23:00 이상**, 인접 측정 간격 **6시간 이하**, 누적거리 감소 없음이 모두 성립한 날이다. 같은 누적거리의 0km는 허용하되 누락을 정상 운행일로 가정하지 않는다. 예시의 2개 새벽 기록은 하루를 덮지 않아 completeDayCount=0이다. 이는 연속 센서 수집의 보장이 아니라 실제 저장 자료에 적용한 보수적 판정 기준이다.
 
-`completeDayCount<14`이면 프론트는 「기록 수집 중」을 표시하고 SOC<=30%일 때만 충전을 권장한다. 14일 이상이면 기존 프론트 로직을 사용한다. 서버 응답에는 chargeRecommended·다음 충전일이 없다.
+현재 프론트는 `completeDayCount`를 참고값으로 받고, 원본 스냅샷의 날짜별 누적거리 차분으로 어제까지 최근 14일을 계산한다. 판정에 들어갈 일수가 14개 미만이면 「기록 수집 중」을 표시하고 SOC<=30%일 때만 충전을 권장한다. 서버 응답에는 chargeRecommended·다음 충전일이 없다.
 
-시연용 Flyway `V4__demo_vehicle_snapshots.sql`은 최초 적용 당시 한국시간 기준 어제까지 14일의 기록을 `mock-vehicle-001`에 한 번만 넣는다. 매일 00:30·06:15·12:00·17:45·23:30에 5건씩 생성하며 간격은 5시간 45분, 하루 주행거리는 40km다. 기록이 비어 있던 시연 차량은 기본 56일 조회에서 `records` 70건과 `completeDayCount=14`를 반환한다. 같은 차량·시각의 기존 값은 덮어쓰지 않으며 다른 차량의 기록과 실제 방문 집계는 변경하지 않는다. 서버 재기동·재배포 시 다시 넣지 않고 기존 보관·만료 정책을 따른다. 이 자료는 시연용 합성 데이터다.
+시연용 Flyway V4는 최초 14일 기록을 한 번 넣고, V5는 이를 이어서 보충하는 함수를 등록하고 최초 실행한다. 서버 기동 시와 한국시간 날짜 변경 후 `mock-vehicle-001`의 어제까지 최근 14일에 빈 측정 시각을 채운다. 매일 00:30·06:15·12:00·17:45·23:30에 5건씩, 간격은 5시간 45분, 하루 주행거리는 40km다. 기존 누적거리와 4일 SOC 주기를 이어 가며, 이미 같은 차량·시각의 값이 있으면 보존한다. 실제 방문 집계는 바꾸지 않고 기존 56일 보관·만료 정책을 따른다. [시연 데이터 갱신과 프론트 확인 내용](docs/DEMO_HISTORY.md)에 동작과 검증 범위를 정리했다.
 
 | HTTP | 상황 | 본문 예시 |
 | --- | --- | --- |
@@ -540,6 +540,8 @@ Host: 15-164-244-37.sslip.io
 요구사항: `REQ_VS_005`, `REQ_LG_002`. 마지막 COMPLETE와 최근 보관된 차량 스냅샷을 조회한다. 시연용 결과는 source=MOCK·trusted=false로 표시한다.
 
 `GET https://15-164-244-37.sslip.io/api/v1/charging-events/latest`
+
+시연 차량은 생성된 스냅샷에서 전날 23:30보다 SOC가 오른 날의 00:30에 MOCK COMPLETE를 함께 생성한다. 완료 당시 누적거리를 저장하므로 `lastChargeCompletedAt`과 `distanceSinceChargeKm`를 표시할 수 있다. `source=MOCK`, `trusted=false`이며 방문 집계는 증가하지 않는다.
 
 | Query | JSON 의미 타입 | Kotlin | 필수 | 예시 | 설명 |
 | --- | --- | --- | --- | --- | --- |
@@ -742,7 +744,7 @@ docker compose --env-file .env -f compose.yaml down
 
 Windows에서는 `python3` 대신 `python`을 사용할 수 있다. 앱은 PostgreSQL health 이후, Caddy는 앱 health 이후 시작한다. `down`은 DB·Caddy CA named volume을 유지한다. 볼륨 삭제 옵션은 사용하지 않는다. 계정 초기화는 새 DB 볼륨의 첫 실행 때만 적용하므로 `.env` 암호만 바꿔도 기존 계정의 암호가 바뀌지는 않는다. 기존 볼륨이 있다면 기존 DB 비밀번호와 계정명을 유지한다.
 
-Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1~V4가 적용되어 기존 캐시를 유지하고 기록 테이블·시드·지역 동기화 컬럼을 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
+Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1~V5가 적용되어 기존 캐시를 유지하고 기록 테이블·시드·지역 동기화 컬럼·시연 기록 보충 함수를 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
 
 스냅샷은 서울 날짜 기준 최근 56일만 조회·저장하며 매일 03:10에 보관기간 밖 기록을 정리한다. 삭제 기준은 HISTORY_RETENTION_DAYS 설정을 따른다. 이벤트 멱등성·방문 기록은 별도 기록이며 스냅샷 정리와 혼동하지 않는다.
 

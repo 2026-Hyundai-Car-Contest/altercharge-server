@@ -48,6 +48,7 @@ app:
   stations:
     status-max-age-minutes: ${STATION_STATUS_MAX_AGE_MINUTES}
   history:
+    demo-enabled: true
     retention-days: ${HISTORY_RETENTION_DAYS}
     max-future-minutes: ${HISTORY_MAX_FUTURE_MINUTES}
   collector:

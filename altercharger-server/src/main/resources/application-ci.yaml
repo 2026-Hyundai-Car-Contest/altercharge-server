@@ -1,4 +1,6 @@
 app:
+  history:
+    demo-enabled: false
   collector:
     enabled: false
     service-key: ""

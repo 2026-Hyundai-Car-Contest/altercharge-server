@@ -2,14 +2,26 @@ package com.server.altercharger_server.history;
 
 import com.server.altercharger_server.common.QuerydslConfig;
 import com.server.altercharger_server.history.HistoryDtos.SnapshotRecord;
+import com.server.altercharger_server.history.entity.ChargingEvent;
+import com.server.altercharger_server.history.entity.Vehicle;
+import com.server.altercharger_server.history.entity.VehicleSnapshot;
+import com.server.altercharger_server.history.repository.ChargingEventRepository;
+import com.server.altercharger_server.history.repository.StationVisitRepository;
+import com.server.altercharger_server.history.repository.VehicleRepository;
+import com.server.altercharger_server.history.repository.VehicleSnapshotRepository;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -19,6 +31,7 @@ import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabas
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataAccessException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -59,7 +72,15 @@ class HistoryDemoSeedTests {
     @Autowired HistoryService history;
     @Autowired HistoryPolicy policy;
     @Autowired DataSource dataSource;
+    @Autowired VehicleSnapshotRepository snapshots;
+    @Autowired ChargingEventRepository events;
+    @Autowired VehicleRepository vehicles;
+    @Autowired StationVisitRepository visits;
+    @Autowired MutableClock clock;
     @MockitoBean StationMatcher matcher;
+
+    @BeforeEach
+    void resetClock() { clock.set(Instant.now()); }
 
     @Test
     void migratedDemoHistoryContainsFourteenCompleteKoreanDaysWithNondecreasingMileage() {
@@ -113,7 +134,7 @@ class HistoryDemoSeedTests {
                     """);
         }
 
-        var latest = upgradeFlyway("latest");
+        var latest = upgradeFlyway("4");
         assertEquals(1, latest.migrate().migrationsExecuted);
         assertEquals(0, latest.migrate().migrationsExecuted);
 
@@ -150,6 +171,128 @@ class HistoryDemoSeedTests {
         }
     }
 
+    @Test
+    void rollingHistoryStaysCompleteAcrossDayChangesRestartsAndLongDowntime() {
+        var initialDate = policy.today();
+        for (int elapsedDays : new int[]{0, 1, 4, 40, 90}) {
+            clock.set(initialDate.plusDays(elapsedDays).atTime(8, 0).atZone(HistoryPolicy.SEOUL).toInstant());
+            history.purgeExpiredSnapshots();
+            var asOf = OffsetDateTime.now(clock);
+            snapshots.refreshDemoHistory(asOf);
+            assertEquals(0, snapshots.refreshDemoHistory(asOf), "a restart must not insert duplicate rows");
+
+            var result = history.snapshots("mock-vehicle-001", policy.today().minusDays(14), policy.today().minusDays(1));
+            assertEquals(70, result.records().size());
+            assertEquals(14, result.completeDayCount());
+            var days = result.records().stream().collect(Collectors.groupingBy(row ->
+                    row.recordedAt().atZoneSameInstant(HistoryPolicy.SEOUL).toLocalDate()));
+            for (int day = 1; day <= 14; day++) {
+                var rows = days.get(policy.today().minusDays(day));
+                assertEquals(5, rows.size());
+                assertEquals(40.0, rows.getLast().odometerKm() - rows.getFirst().odometerKm());
+            }
+            for (int index = 1; index < result.records().size(); index++) {
+                assertTrue(result.records().get(index).odometerKm() >= result.records().get(index - 1).odometerKm());
+            }
+            assertTrue(result.records().stream().allMatch(row -> row.recordedAt().isBefore(asOf)));
+            var retainedDates = history.snapshots("mock-vehicle-001", null, null).records().stream()
+                    .map(row -> row.recordedAt().atZoneSameInstant(HistoryPolicy.SEOUL).toLocalDate()).distinct().toList();
+            for (int index = 1; index < retainedDates.size(); index++) {
+                assertEquals(retainedDates.get(index - 1).plusDays(1), retainedDates.get(index),
+                        "retained gaps would make the app attribute all missing mileage to a single date");
+            }
+            assertTrue(snapshots.count() <= 56 * 5);
+            assertNotNull(history.latestCharge("mock-vehicle-001").distanceSinceChargeKm());
+        }
+    }
+
+    @Test
+    void mockCompletionsMatchBatteryRisesAndSupplyEveryLastChargeFieldUsedByTheApp() {
+        var records = history.snapshots("mock-vehicle-001", null, null).records();
+        var completions = events.findAll();
+        assertEquals(3, completions.size());
+        for (var event : completions) {
+            int index = java.util.stream.IntStream.range(0, records.size())
+                    .filter(i -> records.get(i).recordedAt().toInstant().equals(event.getOccurredAt().toInstant()))
+                    .findFirst().orElseThrow();
+            assertTrue(index > 0);
+            assertTrue(records.get(index).socPercent() > records.get(index - 1).socPercent());
+            assertEquals(records.get(index).odometerKm(), event.getOdometerKm());
+            assertEquals(HistoryDtos.EventType.COMPLETE, event.getEventType());
+            assertEquals(HistoryDtos.Source.MOCK, event.getSource());
+            assertFalse(event.isVerified());
+            assertNull(event.getMatchedStationId());
+            assertEquals(0, event.getVisitCountAdded());
+            assertFalse(event.isDailyDuplicate());
+        }
+        var latest = history.latestCharge("mock-vehicle-001");
+        assertEquals(policy.today().minusDays(2), latest.lastChargeCompletedAt().atZoneSameInstant(HistoryPolicy.SEOUL).toLocalDate());
+        assertEquals(LocalTime.of(0, 30), latest.lastChargeCompletedAt().atZoneSameInstant(HistoryPolicy.SEOUL).toLocalTime());
+        assertEquals(20480.0, latest.odometerAtLastChargeKm());
+        assertEquals(20560.0, latest.currentOdometerKm());
+        assertEquals(80.0, latest.distanceSinceChargeKm());
+        assertEquals(HistoryDtos.Source.MOCK, latest.source());
+        assertFalse(latest.trusted());
+        assertEquals(0, visits.count());
+    }
+
+    @Test
+    void rollingRefreshPreservesExistingMeasurementsEventsAndOtherVehicles() {
+        var initialDate = policy.today();
+        clock.set(initialDate.plusDays(3).atTime(8, 0).atZone(HistoryPolicy.SEOUL).toInstant());
+        var existingAt = initialDate.atTime(0, 30).atZone(HistoryPolicy.SEOUL).toOffsetDateTime();
+        var saved = history.saveSnapshot(new HistoryDtos.SnapshotRequest("mock-vehicle-001", existingAt, 27, 33333.0, 123));
+        vehicles.saveAndFlush(new Vehicle("unrelated-vehicle", "mock-user-001"));
+        var unrelated = VehicleSnapshot.builder().snapshotId(UUID.randomUUID().toString()).vehicleId("unrelated-vehicle")
+                .recordedAt(existingAt).socPercent(66).odometerKm(8888.0).build();
+        snapshots.saveAndFlush(unrelated);
+        var completionAt = initialDate.plusDays(2).atTime(0, 30).atZone(HistoryPolicy.SEOUL).toOffsetDateTime();
+        String completionId = "demo-complete:mock-vehicle-001:" + initialDate.plusDays(2);
+        events.saveAndFlush(ChargingEvent.builder().eventId(completionId).vehicleId("mock-vehicle-001")
+                .eventType(HistoryDtos.EventType.COMPLETE).source(HistoryDtos.Source.MOCK).verified(false)
+                .occurredAt(completionAt).lat(37.55).lng(127.14).socPercent(67).odometerKm(20640.0).build());
+
+        snapshots.refreshDemoHistory(OffsetDateTime.now(clock));
+
+        var preserved = snapshots.findByVehicleIdAndRecordedAt("mock-vehicle-001", existingAt).orElseThrow();
+        assertEquals(saved.body().snapshotId(), preserved.getSnapshotId());
+        assertEquals(27, preserved.getSocPercent());
+        assertEquals(33333.0, preserved.getOdometerKm());
+        assertEquals(123, preserved.getDrivableRangeKm());
+        assertEquals(8888.0, snapshots.findById(unrelated.getSnapshotId()).orElseThrow().getOdometerKm());
+        assertEquals(1, history.snapshots("unrelated-vehicle", null, null).records().size());
+        assertEquals(67, events.findById(completionId).orElseThrow().getSocPercent());
+        assertEquals(0, visits.count());
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void completionInsertFailureRollsBackTheNewSnapshotsAsWell() throws Exception {
+        long previousSnapshots = snapshots.count();
+        long previousEvents = events.count();
+        var asOf = policy.today().plusDays(3).atTime(8, 0).atZone(HistoryPolicy.SEOUL).toOffsetDateTime();
+        try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE FUNCTION fail_demo_completion() RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN RAISE EXCEPTION 'FIXTURE_COMPLETION_FAILURE'; END; $$
+                    """);
+            statement.execute("""
+                    CREATE TRIGGER fail_demo_completion BEFORE INSERT ON charging_events
+                    FOR EACH ROW EXECUTE FUNCTION fail_demo_completion()
+                    """);
+        }
+        try {
+            assertThrows(DataAccessException.class, () -> snapshots.refreshDemoHistory(asOf));
+            assertEquals(previousSnapshots, snapshots.count());
+            assertEquals(previousEvents, events.count());
+        } finally {
+            try (var connection = dataSource.getConnection(); var statement = connection.createStatement()) {
+                statement.execute("DROP TRIGGER fail_demo_completion ON charging_events");
+                statement.execute("DROP FUNCTION fail_demo_completion()");
+            }
+        }
+    }
+
     private Flyway upgradeFlyway(String target) {
         return Flyway.configure().dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
                 .locations("classpath:db/migration").schemas("demo_seed_upgrade").defaultSchema("demo_seed_upgrade")
@@ -159,6 +302,14 @@ class HistoryDemoSeedTests {
     @TestConfiguration(proxyBeanMethods = false)
     static class TestClock {
         @Bean
-        Clock clock() { return Clock.systemUTC(); }
+        MutableClock clock() { return new MutableClock(); }
+    }
+
+    static class MutableClock extends Clock {
+        private Instant now = Instant.now();
+        void set(Instant now) { this.now = now; }
+        @Override public ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(ZoneId zone) { return Clock.fixed(now, zone); }
+        @Override public Instant instant() { return now; }
     }
 }
