@@ -21,7 +21,7 @@ DB에서는 보수적인 위·경도 범위로 후보를 제한하고, 기존 �
 
 Gradle annotationProcessor에 `querydsl-apt:7.7:jpa`와 Jakarta Persistence API를 등록한다. Q 클래스는 `build/generated/sources/annotationProcessor/java/main` 아래에 생성하며 직접 작성하거나 Git에 추가하지 않는다. `compileJava`, `test`, `bootJar`와 기존 Docker 빌드가 필요한 생성을 자동으로 수행한다.
 
-기본 `test`에 포함된 `StationPersistenceTests`는 Docker Engine에서 별도 PostgreSQL 17 컨테이너를 시작한다. 기존 Flyway V1~V3로 초기화한 뒤 Hibernate validate로 검증하며, 테스트용 비밀번호는 실행마다 무작위로 생성한다. 테스트가 끝나면 전용 컨테이너를 종료하며 기존 로컬·운영 DB를 사용하지 않는다. Docker가 없으면 통합 테스트를 생략하지 않고 실패한다.
+기본 `test`에 포함된 `StationPersistenceTests`는 Docker Engine에서 별도 PostgreSQL 17 컨테이너를 시작한다. 현재 Flyway 마이그레이션으로 초기화한 뒤 Hibernate validate로 검증하며, 테스트용 비밀번호는 실행마다 무작위로 생성한다. 테스트가 끝나면 전용 컨테이너를 종료하며 기존 로컬·운영 DB를 사용하지 않는다. Docker가 없으면 통합 테스트를 생략하지 않고 실패한다.
 
 검증 항목은 일반·날짜변경선·극지 후보 검색, 경계 포함, 중복 없는 전체 fetch join, 복합 키 쌍 구분, 정확한 거리와 키워드·페이지 동작, 빈 대상 집합, 지역별 벌크 갱신의 flush·clear와 엔티티 적재 방지, 삭제 및 다른 지역 제외, 원천 시각 보존, 빈 변경분의 확인 시각 갱신, 페이지 근거 불명확 시 갱신 금지, 트랜잭션 롤백이다. 기존 수집기의 마지막 페이지·실패·재시도 검증도 유지한다.
 

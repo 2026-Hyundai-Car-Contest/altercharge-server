@@ -521,6 +521,8 @@ Host: 15-164-244-37.sslip.io
 
 `completeDayCount<14`이면 프론트는 「기록 수집 중」을 표시하고 SOC<=30%일 때만 충전을 권장한다. 14일 이상이면 기존 프론트 로직을 사용한다. 서버 응답에는 chargeRecommended·다음 충전일이 없다.
 
+시연용 Flyway `V4__demo_vehicle_snapshots.sql`은 최초 적용 당시 한국시간 기준 어제까지 14일의 기록을 `mock-vehicle-001`에 한 번만 넣는다. 매일 00:30·06:15·12:00·17:45·23:30에 5건씩 생성하며 간격은 5시간 45분, 하루 주행거리는 40km다. 기록이 비어 있던 시연 차량은 기본 56일 조회에서 `records` 70건과 `completeDayCount=14`를 반환한다. 같은 차량·시각의 기존 값은 덮어쓰지 않으며 다른 차량의 기록과 실제 방문 집계는 변경하지 않는다. 서버 재기동·재배포 시 다시 넣지 않고 기존 보관·만료 정책을 따른다. 이 자료는 시연용 합성 데이터다.
+
 | HTTP | 상황 | 본문 예시 |
 | --- | --- | --- |
 | 200 | 정상 / 기록 없음 | 위 정상 JSON / `{"vehicleId":"mock-vehicle-001","records":[],"retentionDays":56,"completeDayCount":0}` |
@@ -740,7 +742,7 @@ docker compose --env-file .env -f compose.yaml down
 
 Windows에서는 `python3` 대신 `python`을 사용할 수 있다. 앱은 PostgreSQL health 이후, Caddy는 앱 health 이후 시작한다. `down`은 DB·Caddy CA named volume을 유지한다. 볼륨 삭제 옵션은 사용하지 않는다. 계정 초기화는 새 DB 볼륨의 첫 실행 때만 적용하므로 `.env` 암호만 바꿔도 기존 계정의 암호가 바뀌지는 않는다. 기존 볼륨이 있다면 기존 DB 비밀번호와 계정명을 유지한다.
 
-Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1~V3가 적용되어 기존 캐시를 유지하고 기록 테이블·시드·지역 동기화 컬럼을 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
+Flyway가 DB 변경을 관리하고 Hibernate는 ddl-auto=validate로 검증한다. 새 DB는 별도 조작 없이 V1부터 적용한다. 이전 2개 API 단계의 기존 4개 테이블(stations, chargers, collection_state, api_daily_usage) DB는 먼저 백업하고 해당 구조가 예상한 기존 스키마인지 확인한다. Flyway 이력이 없는 기존 DB를 의도적으로 인수할 때만 FLYWAY_ADOPT_LEGACY_SCHEMA=true로 한 번 기동한다. baseline version 0 이후 V1~V4가 적용되어 기존 캐시를 유지하고 기록 테이블·시드·지역 동기화 컬럼을 추가한다. 성공 후 false로 되돌린다. 기본값은 false이며 임의의 비어 있지 않은 DB를 자동 인수하지 않는다.
 
 스냅샷은 서울 날짜 기준 최근 56일만 조회·저장하며 매일 03:10에 보관기간 밖 기록을 정리한다. 삭제 기준은 HISTORY_RETENTION_DAYS 설정을 따른다. 이벤트 멱등성·방문 기록은 별도 기록이며 스냅샷 정리와 혼동하지 않는다.
 
