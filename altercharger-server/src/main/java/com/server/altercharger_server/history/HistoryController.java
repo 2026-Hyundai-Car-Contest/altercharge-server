@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/v1")
-@Tag(name = "차량·충전 기록", description = "시드 차량의 시연용 원본 기록. Mock ID는 인증이 아니며 실제 사용자 격리를 제공하지 않습니다. 환경공단을 직접 호출하지 않습니다.")
+@Tag(name = "차량·충전 기록", description = "시드 차량의 시연용 원본 기록. Mock ID는 인증이 아니며 실제 사용자 격리를 제공하지 않습니다.")
 public class HistoryController {
     private static final String EVENT_OK = "{\"eventId\":\"evt-demo-001\",\"accepted\":true,\"matchedStationId\":null,\"visitCountAdded\":0,\"dailyDuplicate\":false}";
     private static final String SNAPSHOT_OK = "{\"snapshotId\":\"e2f685c7-0b42-4265-a15d-f74db9e90f8b\",\"saved\":true,\"recordedAt\":\"2026-11-10T16:30:00Z\"}";
