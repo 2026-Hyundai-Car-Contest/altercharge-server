@@ -1,34 +1,6 @@
 package com.server.altercharger_server.station.persistence;
 
-import java.util.List;
-import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 
-public interface StationRepository extends JpaRepository<StationEntity, String> {
-    // Fetch the complete collection, then filter deleted chargers in the DTO mapping.
-    // A filtered collection fetch would leave a misleading partial managed collection.
-    @Query("""
-            select distinct s from StationEntity s left join fetch s.chargers
-            where exists (select c.id from ChargerEntity c where c.station = s and c.deleted = false)
-            order by s.stationId
-            """)
-    List<StationEntity> findActiveWithChargers();
-
-    @Query("""
-            select distinct s from StationEntity s left join fetch s.chargers
-            where s.lat between :south and :north
-              and ((:wrapsLongitude = false and s.lng between :west and :east)
-                or (:wrapsLongitude = true and (s.lng >= :west or s.lng <= :east)))
-              and exists (select c.id from ChargerEntity c where c.station = s and c.deleted = false)
-            order by s.stationId
-            """)
-    List<StationEntity> findActiveWithinBounds(@Param("south") double south, @Param("north") double north,
-                                              @Param("west") double west, @Param("east") double east,
-                                              @Param("wrapsLongitude") boolean wrapsLongitude);
-
-    @Query("select distinct s from StationEntity s left join fetch s.chargers where s.stationId = :stationId")
-    Optional<StationEntity> findWithChargers(@Param("stationId") String stationId);
-
+public interface StationRepository extends JpaRepository<StationEntity, String>, StationQueries {
 }

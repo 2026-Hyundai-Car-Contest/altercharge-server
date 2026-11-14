@@ -4,7 +4,7 @@
 - Swagger UI: [https://15-164-244-37.sslip.io/swagger-ui/index.html](https://15-164-244-37.sslip.io/swagger-ui/index.html)
 - OpenAPI JSON: [https://15-164-244-37.sslip.io/v3/api-docs](https://15-164-244-37.sslip.io/v3/api-docs)
 
-버전 **0.2.0** · 요구사항정의서 v0.1(2026-11-10) 기반 · 업무 REST API **01~08 구현**. Java 21, Spring Boot 4.1.2, Gradle Wrapper 9.8.2, Spring Data JPA, PostgreSQL, Flyway를 사용한다. 아래 요청·응답의 충전소, 이벤트, 거리, 시각은 모두 가상의 테스트 데이터다.
+버전 **0.2.0** · 요구사항정의서 v0.1(2026-11-10) 기반 · 업무 REST API **01~08 구현**. Java 21, Spring Boot 4.1.2, Gradle Wrapper 9.8.2, Spring Data JPA, Querydsl 7.7(OpenFeign), PostgreSQL, Flyway를 사용한다. 아래 요청·응답의 충전소, 이벤트, 거리, 시각은 모두 가상의 테스트 데이터다.
 
 MVP는 주차 화면이다. 차량 기록을 PostgreSQL에 저장하는 방식과 출력별 속도 구간은 기존 협업 설계안에 따른 구현 가정이다. 원문에서 프론트 담당인 충전 권장 여부·다음 충전일·화면 문구를 서버가 계산하지 않는다. 기존 API 초안 문서는 삭제했으며 현재 계약은 이 문서와 실제 OpenAPI를 기준으로 한다.
 
@@ -760,7 +760,7 @@ certutil -user -addstore Root .\local-ca.crt
 
 [Caddy 로컬 TLS](https://caddyserver.com/docs/automatic-https#local-https)는 OS·브라우저·Android에서 자동으로 신뢰되지 않는다. Android Automotive 에뮬레이터의 10.0.2.2와 localhost는 서로 다른 호스트다. 현재 인증서를 다른 IP에 재사용하지 말고 실제 접근 호스트 이름에 맞는 인증서와 [Android 디버그 CA 설정](https://developer.android.com/privacy-and-security/security-config#debug-overrides)을 별도로 준비한다. TLS·호스트 이름 검증은 유지한다.
 
-JDK 21 테스트·패키징:
+JDK 21 테스트·패키징(Docker Engine 실행 필요):
 
 ```powershell
 cd altercharger-server
@@ -768,7 +768,7 @@ cd altercharger-server
 .\gradlew.bat bootJar --no-daemon -x test
 ```
 
-Linux/macOS에서는 ./gradlew를 사용한다. ci 프로필과 가짜 JSON·시드로 실제 환경공단 호출·키·AWS 자격증명 없이 검증한다. CI는 main의 push·pull_request에서 테스트·JAR 패키징을 수행한다. HTTP 필드·범위 검증은 Bean Validation, 도메인 정책은 서비스, 외부 JSON 검증은 수신 경계에서 처리한다. Swagger 실제 생성과 정확한 8개 업무 operation은 로컬 스모크에서 확인한다. 작업하는 Codex의 한국어 Conventional Commits 규칙은 [AGENTS.md](AGENTS.md)에 둔다.
+Linux/macOS에서는 ./gradlew를 사용한다. ci 프로필과 가짜 JSON·시드로 실제 환경공단 호출·키·AWS 자격증명 없이 검증한다. 기본 test에는 Testcontainers가 별도 PostgreSQL 17 컨테이너를 시작하는 저장소 통합 테스트도 포함한다. 테스트 비밀번호는 실행 시 무작위로 만들며 로컬·운영 .env와 기존 DB 볼륨은 사용하지 않는다. CI는 main의 push·pull_request에서 Docker Engine을 확인한 뒤 테스트·JAR 패키징을 수행한다. HTTP 필드·범위 검증은 Bean Validation, 도메인 정책은 서비스, 외부 JSON 검증은 수신 경계에서 처리한다. Swagger 실제 생성과 정확한 8개 업무 operation은 로컬 스모크에서 확인한다. Querydsl 적용 범위와 Q 클래스 생성은 [QUERYDSL.md](docs/QUERYDSL.md), 작업하는 Codex의 한국어 Conventional Commits 규칙은 [AGENTS.md](AGENTS.md)에 둔다.
 
 ## 배포 상태
 

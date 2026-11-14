@@ -178,7 +178,7 @@ public class StationStore {
             boolean completePages = provenCoverage(snapshot, region);
             if (completePages) {
                 // Product policy: a successful poll confirms retained states, including omitted changes.
-                // This is cache confirmation, not a new report from each physical charger. One JPQL
+                // This is cache confirmation, not a new report from each physical charger. One bulk
                 // update avoids loading the region's entities and commits with every merged delta.
                 int refreshed = chargers.refreshStatusObservedAtForRegions(Set.of(region), observedAt);
                 log.info("Collector refresh task=status region={} chargers={} stage=OBSERVATION_REFRESH reason=STATUS_POLL_CONFIRMED",

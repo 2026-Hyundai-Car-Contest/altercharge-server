@@ -33,7 +33,9 @@ jobs:
           cache-dependency-path: |
             altercharger-server/*.gradle
             altercharger-server/gradle/wrapper/gradle-wrapper.properties
-      - name: Run required tests
+      - name: Verify Docker Engine for repository tests
+        run: docker info --format '{{.ServerVersion}}'
+      - name: Run unit and PostgreSQL repository tests
         run: ./gradlew test --no-daemon -Dspring.profiles.active=ci
       - name: Verify local startup configuration boundaries
         working-directory: .
